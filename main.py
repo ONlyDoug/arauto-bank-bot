@@ -12,13 +12,9 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 # Define o caminho para a base de dados no armazenamento sincronizado da Discloud
-# Esta é a alteração CRUCIAL para garantir que os dados sejam persistentes.
+# O diretório /storage é fornecido automaticamente pela Discloud.
 STORAGE_PATH = "/storage"
 DB_FILE = os.path.join(STORAGE_PATH, "arauto_bank.db")
-
-# Garante que o diretório de armazenamento existe (importante para o primeiro arranque)
-if not os.path.exists(STORAGE_PATH):
-    os.makedirs(STORAGE_PATH)
 
 # Define as intenções (Intents) necessárias para o bot funcionar
 intents = discord.Intents.default()
