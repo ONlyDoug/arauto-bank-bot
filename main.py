@@ -126,6 +126,12 @@ async def on_member_join(member):
 # 5. COMANDOS DO BOT
 # =================================================================================
 
+# --- Comandos Gerais ---
+@bot.command(name='ola')
+async def hello(ctx):
+    """Responde com uma saudação."""
+    await ctx.send(f'Olá, {ctx.author.mention}! Eu sou o Arauto Bank, pronto para servir.')
+
 # --- Comandos de Economia ---
 @bot.command(name='saldo')
 async def balance(ctx):
@@ -184,6 +190,31 @@ async def transfer(ctx, destinatario: discord.Member, quantidade: int):
         description=f"**{ctx.author.display_name}** transferiu **🪙 {quantidade}** para **{destinatario.display_name}**.",
         color=discord.Color.green()
     )
+    await ctx.send(embed=embed)
+    
+# --- Comandos da Loja ---
+@bot.command(name='loja')
+async def shop(ctx):
+    """Mostra os itens disponíveis na loja."""
+    conn = get_db_connection()
+    if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
+    
+    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+        cursor.execute("SELECT item_id, nome, preco, descricao FROM loja ORDER BY preco ASC")
+        itens = cursor.fetchall()
+    conn.close()
+
+    if not itens:
+        await ctx.send("A loja está vazia no momento.")
+        return
+
+    embed = discord.Embed(title="🎁 Loja de Recompensas do Arauto Bank", color=discord.Color.purple())
+    for item in itens:
+        embed.add_field(
+            name=f"**{item['nome']}** (ID: {item['item_id']})",
+            value=f"**Preço:** 🪙 {item['preco']}\n*_{item['descricao']}_*",
+            inline=False
+        )
     await ctx.send(embed=embed)
 
 @bot.command(name='comprar')
@@ -281,11 +312,9 @@ async def add_coins(ctx, membro: discord.Member, quantidade: int):
     conn.close()
     await ctx.send(f"🪙 **{quantidade}** moedas foram adicionadas a {membro.mention}. Novo saldo: **{novo_saldo}**.")
 
-# O resto dos comandos de administração (setup, loja, etc.) permanecem iguais.
 @bot.command(name='setup')
 @commands.has_permissions(administrator=True)
 async def setup_server(ctx):
-    # (Código inalterado)
     guild = ctx.guild
     categoria_existente = discord.utils.get(guild.categories, name="🪙 BANCO ARAUTO 🪙")
     if categoria_existente:
@@ -313,7 +342,6 @@ async def setup_server(ctx):
 @bot.command(name='additem')
 @commands.has_permissions(administrator=True)
 async def add_item_to_shop(ctx, item_id: str, preco: int, nome: str, *, descricao: str):
-    # (Código inalterado)
     conn = get_db_connection()
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
 
@@ -330,7 +358,6 @@ async def add_item_to_shop(ctx, item_id: str, preco: int, nome: str, *, descrica
 @bot.command(name='delitem')
 @commands.has_permissions(administrator=True)
 async def delete_item_from_shop(ctx, item_id: str):
-    # (Código inalterado)
     conn = get_db_connection()
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
 
