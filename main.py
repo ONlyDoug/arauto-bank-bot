@@ -38,50 +38,42 @@ def get_db_connection():
         return None
 
 def setup_database():
-    """Inicializa a base de dados, criando as tabelas se não existirem."""
+    """Inicializa a base de dados, criando todas as tabelas se não existirem."""
     conn = get_db_connection()
     if conn is None: return
 
     with conn.cursor() as cursor:
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS banco (
-            user_id BIGINT PRIMARY KEY,
-            saldo INTEGER NOT NULL DEFAULT 0
-        )
-        """)
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS loja (
-            item_id TEXT PRIMARY KEY,
-            nome TEXT NOT NULL,
-            preco INTEGER NOT NULL,
-            descricao TEXT
-        )
-        """)
-        # NOVA TABELA PARA TRANSAÇÕES
+        cursor.execute("CREATE TABLE IF NOT EXISTS banco (user_id BIGINT PRIMARY KEY, saldo INTEGER NOT NULL DEFAULT 0)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS loja (item_id TEXT PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS transacoes (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT NOT NULL,
-            tipo TEXT NOT NULL,
-            valor INTEGER NOT NULL,
-            descricao TEXT,
-            data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
+            id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL,
+            valor INTEGER NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )""")
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS eventos (
+            id SERIAL PRIMARY KEY, nome TEXT NOT NULL, recompensa INTEGER NOT NULL,
+            ativo BOOLEAN DEFAULT TRUE, criador_id BIGINT NOT NULL,
+            data_criacao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        )""")
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS participantes (
+            evento_id INTEGER REFERENCES eventos(id) ON DELETE CASCADE,
+            user_id BIGINT,
+            PRIMARY KEY (evento_id, user_id)
+        )""")
     
     conn.commit()
     conn.close()
-    print("Base de dados Supabase verificada e pronta (com tabela de transações).")
+    print("Base de dados Supabase verificada e pronta (com todas as tabelas).")
 
 def get_account(user_id: int):
     """Garante que um utilizador tem uma conta no banco."""
     conn = get_db_connection()
     if conn is None: return
-
     with conn.cursor() as cursor:
-        cursor.execute("SELECT saldo FROM banco WHERE user_id = %s", (user_id,))
-        result = cursor.fetchone()
-        if result is None:
+        cursor.execute("SELECT 1 FROM banco WHERE user_id = %s", (user_id,))
+        if cursor.fetchone() is None:
             cursor.execute("INSERT INTO banco (user_id, saldo) VALUES (%s, 0) ON CONFLICT (user_id) DO NOTHING", (user_id,))
             conn.commit()
     conn.close()
@@ -90,15 +82,10 @@ def registrar_transacao(user_id: int, tipo: str, valor: int, descricao: str):
     """Registra uma nova transação na base de dados."""
     conn = get_db_connection()
     if conn is None: return
-
     with conn.cursor() as cursor:
-        cursor.execute(
-            "INSERT INTO transacoes (user_id, tipo, valor, descricao) VALUES (%s, %s, %s, %s)",
-            (user_id, tipo, valor, descricao)
-        )
+        cursor.execute("INSERT INTO transacoes (user_id, tipo, valor, descricao) VALUES (%s, %s, %s, %s)", (user_id, tipo, valor, descricao))
         conn.commit()
     conn.close()
-
 
 # =================================================================================
 # 4. EVENTOS DO BOT
@@ -110,7 +97,7 @@ async def on_ready():
     if not DATABASE_URL:
         print("ERRO CRÍTICO: A variável de ambiente DATABASE_URL não foi definida.")
         return
-    setup_database() # A função agora também cria a tabela de transações
+    setup_database()
     print(f'Login bem-sucedido como {bot.user.name}')
     print(f'O Arauto Bank está online e pronto para operar!')
     print('------')
@@ -139,17 +126,11 @@ async def balance(ctx):
     get_account(ctx.author.id)
     conn = get_db_connection()
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
-    
     with conn.cursor() as cursor:
         cursor.execute("SELECT saldo FROM banco WHERE user_id = %s", (ctx.author.id,))
         saldo = cursor.fetchone()[0]
     conn.close()
-    
-    embed = discord.Embed(
-        title=f"Saldo de {ctx.author.display_name}",
-        description=f"Você possui **🪙 {saldo}** moedas.",
-        color=discord.Color.gold()
-    )
+    embed = discord.Embed(title=f"Saldo de {ctx.author.display_name}", description=f"Você possui **🪙 {saldo}** moedas.", color=discord.Color.gold())
     await ctx.send(embed=embed)
 
 @bot.command(name='transferir')
@@ -174,86 +155,17 @@ async def transfer(ctx, destinatario: discord.Member, quantidade: int):
         if saldo_remetente < quantidade:
             return await ctx.send("Saldo insuficiente.")
 
-        # Realiza a transação
         cursor.execute("UPDATE banco SET saldo = saldo - %s WHERE user_id = %s", (quantidade, remetente_id))
         cursor.execute("UPDATE banco SET saldo = saldo + %s WHERE user_id = %s", (quantidade, destinatario_id))
         conn.commit()
 
-    # REGISTRA AS TRANSAÇÕES
     registrar_transacao(remetente_id, "Transferência Enviada", -quantidade, f"Para {destinatario.display_name}")
     registrar_transacao(destinatario_id, "Transferência Recebida", quantidade, f"De {ctx.author.display_name}")
     
     conn.close()
-    
-    embed = discord.Embed(
-        title="💸 Transferência Realizada com Sucesso",
-        description=f"**{ctx.author.display_name}** transferiu **🪙 {quantidade}** para **{destinatario.display_name}**.",
-        color=discord.Color.green()
-    )
-    await ctx.send(embed=embed)
-    
-# --- Comandos da Loja ---
-@bot.command(name='loja')
-async def shop(ctx):
-    """Mostra os itens disponíveis na loja."""
-    conn = get_db_connection()
-    if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
-    
-    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
-        cursor.execute("SELECT item_id, nome, preco, descricao FROM loja ORDER BY preco ASC")
-        itens = cursor.fetchall()
-    conn.close()
-
-    if not itens:
-        await ctx.send("A loja está vazia no momento.")
-        return
-
-    embed = discord.Embed(title="🎁 Loja de Recompensas do Arauto Bank", color=discord.Color.purple())
-    for item in itens:
-        embed.add_field(
-            name=f"**{item['nome']}** (ID: {item['item_id']})",
-            value=f"**Preço:** 🪙 {item['preco']}\n*_{item['descricao']}_*",
-            inline=False
-        )
+    embed = discord.Embed(title="💸 Transferência Realizada", description=f"**{ctx.author.display_name}** transferiu **🪙 {quantidade}** para **{destinatario.display_name}**.", color=discord.Color.green())
     await ctx.send(embed=embed)
 
-@bot.command(name='comprar')
-async def buy(ctx, item_id: str):
-    """Compra um item da loja e registra a transação."""
-    comprador_id = ctx.author.id
-    get_account(comprador_id)
-
-    conn = get_db_connection()
-    if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
-
-    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
-        cursor.execute("SELECT nome, preco FROM loja WHERE item_id = %s", (item_id,))
-        item = cursor.fetchone()
-        if item is None:
-            return await ctx.send(f"O item com ID `{item_id}` não foi encontrado.")
-
-        cursor.execute("SELECT saldo FROM banco WHERE user_id = %s", (comprador_id,))
-        saldo_comprador = cursor.fetchone()['saldo']
-
-        if saldo_comprador < item['preco']:
-            return await ctx.send(f"Saldo insuficiente! Faltam **🪙 {item['preco'] - saldo_comprador}** moedas.")
-
-        # Processa a compra
-        cursor.execute("UPDATE banco SET saldo = saldo - %s WHERE user_id = %s", (item['preco'], comprador_id))
-        conn.commit()
-
-        # REGISTRA A TRANSAÇÃO
-        registrar_transacao(comprador_id, "Compra na Loja", -item['preco'], f"Comprou o item '{item['nome']}'")
-
-    conn.close()
-    
-    await ctx.send(f"🎉 Parabéns, {ctx.author.mention}! Você comprou **{item['nome']}** por **🪙 {item['preco']}** moedas.")
-    
-    canal_staff = discord.utils.get(ctx.guild.channels, name='🚨-staff-resgates')
-    if canal_staff:
-        await canal_staff.send(f"⚠️ **Novo Resgate!** {ctx.author.mention} comprou **'{item['nome']}'** (ID: {item_id}).")
-
-# NOVO COMANDO DE EXTRATO
 @bot.command(name='extrato')
 async def statement(ctx):
     """Mostra as últimas 5 transações do utilizador."""
@@ -264,18 +176,11 @@ async def statement(ctx):
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
 
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
-        cursor.execute(
-            "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s ORDER BY data DESC LIMIT 5",
-            (user_id,)
-        )
+        cursor.execute("SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s ORDER BY data DESC LIMIT 5", (user_id,))
         transacoes = cursor.fetchall()
     conn.close()
 
-    embed = discord.Embed(
-        title=f"Extrato Bancário de {ctx.author.display_name}",
-        color=discord.Color.blue()
-    )
-
+    embed = discord.Embed(title=f"Extrato Bancário de {ctx.author.display_name}", color=discord.Color.blue())
     if not transacoes:
         embed.description = "Você ainda não tem nenhuma transação registada."
     else:
@@ -283,16 +188,162 @@ async def statement(ctx):
             valor_str = f"+{t['valor']}" if t['valor'] > 0 else str(t['valor'])
             cor_valor = "🟢" if t['valor'] > 0 else ("🔴" if t['valor'] < 0 else "⚪")
             data_formatada = t['data'].strftime('%d/%m/%Y %H:%M')
-            embed.add_field(
-                name=f"**{t['tipo']}** - {data_formatada}",
-                value=f"{cor_valor} **Valor:** {valor_str} moedas\n*_{t['descricao']}_*",
-                inline=False
-            )
-    
+            embed.add_field(name=f"**{t['tipo']}** - {data_formatada}", value=f"{cor_valor} **Valor:** {valor_str} moedas\n*_{t['descricao']}_*", inline=False)
     await ctx.send(embed=embed)
 
+# --- Comandos da Loja ---
+@bot.command(name='loja')
+async def shop(ctx):
+    """Mostra os itens disponíveis na loja."""
+    conn = get_db_connection()
+    if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
+    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+        cursor.execute("SELECT item_id, nome, preco, descricao FROM loja ORDER BY preco ASC")
+        itens = cursor.fetchall()
+    conn.close()
+    if not itens: return await ctx.send("A loja está vazia no momento.")
+    embed = discord.Embed(title="🎁 Loja de Recompensas do Arauto Bank", color=discord.Color.purple())
+    for item in itens:
+        embed.add_field(name=f"**{item['nome']}** (ID: {item['item_id']})", value=f"**Preço:** 🪙 {item['preco']}\n*_{item['descricao']}_*", inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command(name='comprar')
+async def buy(ctx, item_id: str):
+    """Compra um item da loja e registra a transação."""
+    comprador_id = ctx.author.id
+    get_account(comprador_id)
+    conn = get_db_connection()
+    if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
+    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+        cursor.execute("SELECT nome, preco FROM loja WHERE item_id = %s", (item_id,))
+        item = cursor.fetchone()
+        if item is None: return await ctx.send(f"O item com ID `{item_id}` não foi encontrado.")
+        cursor.execute("SELECT saldo FROM banco WHERE user_id = %s", (comprador_id,))
+        saldo_comprador = cursor.fetchone()['saldo']
+        if saldo_comprador < item['preco']: return await ctx.send(f"Saldo insuficiente! Faltam **🪙 {item['preco'] - saldo_comprador}** moedas.")
+        cursor.execute("UPDATE banco SET saldo = saldo - %s WHERE user_id = %s", (item['preco'], comprador_id))
+        conn.commit()
+        registrar_transacao(comprador_id, "Compra na Loja", -item['preco'], f"Comprou o item '{item['nome']}'")
+    conn.close()
+    await ctx.send(f"🎉 Parabéns, {ctx.author.mention}! Você comprou **{item['nome']}** por **🪙 {item['preco']}** moedas.")
+    canal_staff = discord.utils.get(ctx.guild.channels, name='🚨-staff-resgates')
+    if canal_staff: await canal_staff.send(f"⚠️ **Novo Resgate!** {ctx.author.mention} comprou **'{item['nome']}'** (ID: {item_id}).")
+
+# --- Comandos de Eventos ---
+@bot.command(name='criarevento')
+@commands.has_permissions(administrator=True)
+async def create_event(ctx, recompensa: int, *, nome: str):
+    """Cria um novo evento com uma recompensa."""
+    if recompensa <= 0: return await ctx.send("A recompensa deve ser um valor positivo.")
+    conn = get_db_connection()
+    if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
+    with conn.cursor() as cursor:
+        cursor.execute("INSERT INTO eventos (nome, recompensa, criador_id) VALUES (%s, %s, %s) RETURNING id", (nome, recompensa, ctx.author.id))
+        evento_id = cursor.fetchone()[0]
+        conn.commit()
+    conn.close()
+    embed = discord.Embed(title="🎉 Novo Evento Criado!", description=f"O evento **'{nome}'** está agora ativo!", color=discord.Color.green())
+    embed.add_field(name="ID do Evento", value=f"`{evento_id}`", inline=True)
+    embed.add_field(name="Recompensa", value=f"**🪙 {recompensa}** moedas", inline=True)
+    embed.set_footer(text=f"Use !participar {evento_id} para se inscrever.")
+    await ctx.send(embed=embed)
+
+@bot.command(name='listareventos')
+async def list_events(ctx):
+    """Lista todos os eventos ativos."""
+    conn = get_db_connection()
+    if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
+    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+        cursor.execute("SELECT id, nome, recompensa FROM eventos WHERE ativo = TRUE ORDER BY id ASC")
+        eventos = cursor.fetchall()
+    conn.close()
+    if not eventos: return await ctx.send("Não há eventos ativos no momento.")
+    embed = discord.Embed(title="🏆 Eventos Ativos", color=discord.Color.orange())
+    for evento in eventos:
+        embed.add_field(name=f"**{evento['nome']}** (ID: {evento['id']})", value=f"Recompensa: 🪙 {evento['recompensa']}\nUse `!participar {evento['id']}`", inline=False)
+    await ctx.send(embed=embed)
+
+@bot.command(name='participar')
+async def join_event(ctx, evento_id: int):
+    """Permite que um membro participe de um evento."""
+    get_account(ctx.author.id)
+    conn = get_db_connection()
+    if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
+    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+        cursor.execute("SELECT nome FROM eventos WHERE id = %s AND ativo = TRUE", (evento_id,))
+        evento = cursor.fetchone()
+        if evento is None: return await ctx.send("Este evento não existe ou não está mais ativo.")
+        try:
+            cursor.execute("INSERT INTO participantes (evento_id, user_id) VALUES (%s, %s)", (evento_id, ctx.author.id))
+            conn.commit()
+            await ctx.send(f"{ctx.author.mention}, você inscreveu-se com sucesso no evento **'{evento['nome']}'**!")
+        except psycopg2.IntegrityError:
+            conn.rollback()
+            await ctx.send(f"{ctx.author.mention}, você já está a participar neste evento.")
+    conn.close()
+
+@bot.command(name='finalizarevento')
+@commands.has_permissions(administrator=True)
+async def finish_event(ctx, evento_id: int):
+    """Finaliza um evento e distribui as recompensas."""
+    conn = get_db_connection()
+    if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
+    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+        cursor.execute("SELECT nome, recompensa FROM eventos WHERE id = %s AND ativo = TRUE", (evento_id,))
+        evento = cursor.fetchone()
+        if evento is None: return await ctx.send("Este evento não existe ou já foi finalizado.")
+        cursor.execute("SELECT user_id FROM participantes WHERE evento_id = %s", (evento_id,))
+        participantes = cursor.fetchall()
+        if not participantes:
+            await ctx.send(f"O evento **'{evento['nome']}'** foi finalizado sem participantes.")
+        else:
+            recompensa = evento['recompensa']
+            for p in participantes:
+                user_id = p['user_id']
+                cursor.execute("UPDATE banco SET saldo = saldo + %s WHERE user_id = %s", (recompensa, user_id))
+                registrar_transacao(user_id, "Recompensa de Evento", recompensa, f"Participação no evento '{evento['nome']}'")
+            conn.commit()
+            await ctx.send(f"🎉 O evento **'{evento['nome']}'** foi finalizado! **{len(participantes)}** participantes receberam **🪙 {recompensa}** moedas cada.")
+        cursor.execute("DELETE FROM eventos WHERE id = %s", (evento_id,))
+        conn.commit()
+    conn.close()
+
+@bot.command(name='cancelarevento')
+@commands.has_permissions(administrator=True)
+async def cancel_event(ctx, evento_id: int):
+    """Cancela um evento sem distribuir recompensas."""
+    conn = get_db_connection()
+    if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
+    with conn.cursor() as cursor:
+        cursor.execute("DELETE FROM eventos WHERE id = %s RETURNING nome", (evento_id,))
+        evento_nome = cursor.fetchone()
+        conn.commit()
+    conn.close()
+    if evento_nome:
+        await ctx.send(f"🗑️ O evento **'{evento_nome[0]}'** (ID: {evento_id}) foi cancelado e removido.")
+    else:
+        await ctx.send(f"Não foi encontrado nenhum evento ativo com o ID {evento_id}.")
 
 # --- Comandos de Administração ---
+@bot.command(name='setup')
+@commands.has_permissions(administrator=True)
+async def setup_server(ctx):
+    """Cria a estrutura de canais e categorias para o bot."""
+    guild = ctx.guild
+    categoria_existente = discord.utils.get(guild.categories, name="🪙 BANCO ARAUTO 🪙")
+    if categoria_existente: return await ctx.send("⚠️ A estrutura de canais do Arauto Bank já existe.")
+    await ctx.send("Iniciando a configuração do servidor para o Arauto Bank...")
+    categoria = await guild.create_category("🪙 BANCO ARAUTO 🪙")
+    overwrites_publico = { guild.default_role: discord.PermissionOverwrite(send_messages=False, view_channel=True) }
+    staff_role = discord.utils.get(guild.roles, name="Staff")
+    overwrites_staff = { guild.default_role: discord.PermissionOverwrite(view_channel=False), guild.me: discord.PermissionOverwrite(view_channel=True) }
+    if staff_role: overwrites_staff[staff_role] = discord.PermissionOverwrite(view_channel=True)
+    await categoria.create_text_channel('📜-regras-e-infos', overwrites=overwrites_publico)
+    await categoria.create_text_channel('💰-saldo-e-extrato')
+    await categoria.create_text_channel('🎁-loja-de-recompensas')
+    await categoria.create_text_channel('🚨-staff-resgates', overwrites=overwrites_staff)
+    await ctx.send("✅ Configuração do servidor concluída com sucesso!")
+
 @bot.command(name='addmoedas')
 @commands.has_permissions(administrator=True)
 async def add_coins(ctx, membro: discord.Member, quantidade: int):
@@ -300,55 +351,23 @@ async def add_coins(ctx, membro: discord.Member, quantidade: int):
     get_account(membro.id)
     conn = get_db_connection()
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
-    
     with conn.cursor() as cursor:
         cursor.execute("UPDATE banco SET saldo = saldo + %s WHERE user_id = %s RETURNING saldo", (quantidade, membro.id))
         novo_saldo = cursor.fetchone()[0]
         conn.commit()
-
-    # REGISTRA A TRANSAÇÃO
     registrar_transacao(membro.id, "Depósito Admin", quantidade, f"Adicionado por {ctx.author.display_name}")
-
     conn.close()
     await ctx.send(f"🪙 **{quantidade}** moedas foram adicionadas a {membro.mention}. Novo saldo: **{novo_saldo}**.")
-
-@bot.command(name='setup')
-@commands.has_permissions(administrator=True)
-async def setup_server(ctx):
-    guild = ctx.guild
-    categoria_existente = discord.utils.get(guild.categories, name="🪙 BANCO ARAUTO 🪙")
-    if categoria_existente:
-        await ctx.send("⚠️ A estrutura de canais do Arauto Bank já existe.")
-        return
-
-    await ctx.send("Iniciando a configuração do servidor para o Arauto Bank...")
-    categoria = await guild.create_category("🪙 BANCO ARAUTO 🪙")
-    overwrites_publico = { guild.default_role: discord.PermissionOverwrite(send_messages=False, view_channel=True) }
-    staff_role = discord.utils.get(guild.roles, name="Staff")
-    overwrites_staff = {
-        guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        guild.me: discord.PermissionOverwrite(view_channel=True)
-    }
-    if staff_role:
-        overwrites_staff[staff_role] = discord.PermissionOverwrite(view_channel=True)
-
-    await categoria.create_text_channel('📜-regras-e-infos', overwrites=overwrites_publico)
-    await categoria.create_text_channel('💰-saldo-e-extrato')
-    await categoria.create_text_channel('🎁-loja-de-recompensas')
-    await categoria.create_text_channel('🚨-staff-resgates', overwrites=overwrites_staff)
-    
-    await ctx.send("✅ Configuração do servidor concluída com sucesso!")
 
 @bot.command(name='additem')
 @commands.has_permissions(administrator=True)
 async def add_item_to_shop(ctx, item_id: str, preco: int, nome: str, *, descricao: str):
+    """Adiciona um novo item à loja."""
     conn = get_db_connection()
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
-
     with conn.cursor() as cursor:
         try:
-            cursor.execute("INSERT INTO loja (item_id, nome, preco, descricao) VALUES (%s, %s, %s, %s)",
-                           (item_id, nome, preco, descricao))
+            cursor.execute("INSERT INTO loja (item_id, nome, preco, descricao) VALUES (%s, %s, %s, %s)", (item_id, nome, preco, descricao))
             conn.commit()
             await ctx.send(f"✅ O item **'{nome}'** foi adicionado à loja com sucesso!")
         except psycopg2.IntegrityError:
@@ -358,9 +377,9 @@ async def add_item_to_shop(ctx, item_id: str, preco: int, nome: str, *, descrica
 @bot.command(name='delitem')
 @commands.has_permissions(administrator=True)
 async def delete_item_from_shop(ctx, item_id: str):
+    """Remove um item da loja pelo seu ID."""
     conn = get_db_connection()
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
-
     with conn.cursor() as cursor:
         cursor.execute("DELETE FROM loja WHERE item_id = %s", (item_id,))
         if cursor.rowcount > 0:
