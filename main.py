@@ -2,27 +2,32 @@
 # 1. IMPORTAÇÕES E CONFIGURAÇÃO INICIAL
 # =================================================================================
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 import psycopg2
-import psycopg2.extras # Para aceder às colunas por nome
+import psycopg2.extras
 import os
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, date
+import time
 
-# Carrega as variáveis de ambiente do ficheiro .env
+# Carrega as variáveis de ambiente
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-# Define as intenções (Intents) do bot
+# Define as intenções do bot
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
 intents.messages = True
 intents.message_content = True
+intents.voice_states = True
 
 # Cria a instância do bot
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+# Variáveis de controlo em memória
+user_message_cooldowns = {}
 
 # =================================================================================
 # 2. CONFIGURAÇÃO E FUNÇÕES DA BASE DE DADOS
@@ -46,33 +51,53 @@ def setup_database():
         cursor.execute("CREATE TABLE IF NOT EXISTS banco (user_id BIGINT PRIMARY KEY, saldo INTEGER NOT NULL DEFAULT 0)")
         cursor.execute("CREATE TABLE IF NOT EXISTS loja (item_id TEXT PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transacoes (
-            id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL,
-            valor INTEGER NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        )""")
-        # TABELA DE EVENTOS ATUALIZADA com meta_participacao
+        CREATE TABLE IF NOT EXISTS transacoes (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL,
+            valor INTEGER NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)""")
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS eventos (
-            id SERIAL PRIMARY KEY, nome TEXT NOT NULL, recompensa INTEGER NOT NULL,
-            meta_participacao INTEGER NOT NULL DEFAULT 1,
-            ativo BOOLEAN DEFAULT TRUE, criador_id BIGINT NOT NULL,
-            data_criacao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        )""")
-        # TABELA DE PARTICIPANTES ATUALIZADA com progresso
+        CREATE TABLE IF NOT EXISTS eventos (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, recompensa INTEGER NOT NULL,
+            meta_participacao INTEGER NOT NULL DEFAULT 1, ativo BOOLEAN DEFAULT TRUE, criador_id BIGINT NOT NULL,
+            data_criacao TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)""")
         cursor.execute("""
-        CREATE TABLE IF NOT EXISTS participantes (
-            evento_id INTEGER REFERENCES eventos(id) ON DELETE CASCADE,
-            user_id BIGINT,
-            progresso INTEGER NOT NULL DEFAULT 0,
-            PRIMARY KEY (evento_id, user_id)
-        )""")
+        CREATE TABLE IF NOT EXISTS participantes (evento_id INTEGER REFERENCES eventos(id) ON DELETE CASCADE,
+            user_id BIGINT, progresso INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (evento_id, user_id))""")
+        cursor.execute("CREATE TABLE IF NOT EXISTS configuracoes (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)")
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS atividade_diaria (user_id BIGINT, data DATE, moedas_chat INTEGER DEFAULT 0, 
+            minutos_voz INTEGER DEFAULT 0, PRIMARY KEY (user_id, data))""")
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS reacoes_recompensadas (message_id BIGINT, user_id BIGINT, 
+            PRIMARY KEY (message_id, user_id))""")
+
+        default_configs = {
+            'lastro_prata': '1000', 'recompensa_voz': '10', 'recompensa_chat': '1', 'recompensa_reacao': '50',
+            'limite_diario_voz': '120', 'limite_diario_chat': '100', 'cooldown_chat': '60', 'canal_anuncios': '0',
+            'cargos_gerente_eventos': ''  # Agora guarda uma lista de IDs, vazia por defeito
+        }
+        for chave, valor in default_configs.items():
+            cursor.execute("INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO NOTHING", (chave, valor))
     
     conn.commit()
     conn.close()
-    print("Base de dados Supabase verificada e pronta (com sistema de progresso de eventos).")
+    print("Base de dados Supabase verificada e pronta (com sistema de economia completo).")
+
+def get_config_value(chave: str, default: str = None):
+    conn = get_db_connection()
+    if conn is None: return default
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT valor FROM configuracoes WHERE chave = %s", (chave,))
+        resultado = cursor.fetchone()
+    conn.close()
+    return resultado[0] if resultado else default
+
+def set_config_value(chave: str, valor: str):
+    conn = get_db_connection()
+    if conn is None: return
+    with conn.cursor() as cursor:
+        cursor.execute("INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor", (chave, valor))
+        conn.commit()
+    conn.close()
 
 def get_account(user_id: int):
-    """Garante que um utilizador tem uma conta no banco."""
     conn = get_db_connection()
     if conn is None: return
     with conn.cursor() as cursor:
@@ -83,46 +108,156 @@ def get_account(user_id: int):
     conn.close()
 
 def registrar_transacao(user_id: int, tipo: str, valor: int, descricao: str):
-    """Registra uma nova transação na base de dados."""
     conn = get_db_connection()
     if conn is None: return
     with conn.cursor() as cursor:
         cursor.execute("INSERT INTO transacoes (user_id, tipo, valor, descricao) VALUES (%s, %s, %s, %s)", (user_id, tipo, valor, descricao))
         conn.commit()
     conn.close()
+    
+def get_or_create_daily_activity(user_id: int):
+    today = date.today()
+    conn = get_db_connection()
+    if conn is None: return None
+    with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+        cursor.execute("SELECT * FROM atividade_diaria WHERE user_id = %s AND data = %s", (user_id, today))
+        activity = cursor.fetchone()
+        if activity is None:
+            cursor.execute("INSERT INTO atividade_diaria (user_id, data) VALUES (%s, %s) ON CONFLICT (user_id, data) DO NOTHING", (user_id, today))
+            conn.commit()
+            cursor.execute("SELECT * FROM atividade_diaria WHERE user_id = %s AND data = %s", (user_id, today))
+            activity = cursor.fetchone()
+    conn.close()
+    return activity
 
 # =================================================================================
-# 4. EVENTOS DO BOT
+# 3. VERIFICAÇÕES DE PERMISSÃO PERSONALIZADAS
 # =================================================================================
+
+def can_manage_events():
+    """Verificação para ver se o autor é Admin OU tem um dos cargos de Gerente de Eventos."""
+    async def predicate(ctx):
+        if ctx.author.guild_permissions.administrator:
+            return True
+        
+        roles_id_str = get_config_value('cargos_gerente_eventos', '')
+        if not roles_id_str:
+            return False
+        
+        allowed_role_ids = {int(id_str) for id_str in roles_id_str.split(',') if id_str}
+        author_role_ids = {role.id for role in ctx.author.roles}
+        
+        # Verifica se há qualquer intersecção entre os cargos do autor e os cargos permitidos
+        if not allowed_role_ids.isdisjoint(author_role_ids):
+            return True
+        
+        return False
+    return commands.check(predicate)
+
+# =================================================================================
+# 4. TAREFAS EM BACKGROUND E EVENTOS DO BOT
+# =================================================================================
+
+@tasks.loop(minutes=5)
+async def voice_channel_rewards():
+    """Tarefa que corre em background para dar moedas por tempo em call."""
+    await bot.wait_until_ready()
+    recompensa_por_hora = int(get_config_value('recompensa_voz', '10'))
+    limite_minutos_diario = int(get_config_value('limite_diario_voz', '120'))
+    recompensa_por_ciclo = (recompensa_por_hora / 60) * 5
+    for guild in bot.guilds:
+        for member in guild.members:
+            if member.voice and not member.voice.self_mute and not member.voice.self_deaf:
+                get_account(member.id)
+                activity = get_or_create_daily_activity(member.id)
+                if activity and activity['minutos_voz'] < limite_minutos_diario:
+                    conn = get_db_connection()
+                    if conn is None: continue
+                    with conn.cursor() as cursor:
+                        cursor.execute("UPDATE banco SET saldo = saldo + %s WHERE user_id = %s", (recompensa_por_ciclo, member.id))
+                        cursor.execute("UPDATE atividade_diaria SET minutos_voz = minutos_voz + 5 WHERE user_id = %s AND data = %s", (member.id, date.today()))
+                        conn.commit()
+                    conn.close()
+                    registrar_transacao(member.id, "Renda Passiva", int(recompensa_por_ciclo), "Tempo em canal de voz")
 
 @bot.event
 async def on_ready():
-    """Evento disparado quando o bot se conecta com sucesso."""
     if not DATABASE_URL:
         print("ERRO CRÍTICO: A variável de ambiente DATABASE_URL não foi definida.")
         return
     setup_database()
+    voice_channel_rewards.start()
     print(f'Login bem-sucedido como {bot.user.name}')
     print(f'O Arauto Bank está online e pronto para operar!')
     print('------')
 
 @bot.event
+async def on_message(message):
+    if message.author.bot or message.content.startswith('!'):
+        await bot.process_commands(message)
+        return
+    user_id = message.author.id
+    current_time = time.time()
+    cooldown_seconds = int(get_config_value('cooldown_chat', '60'))
+    if user_id in user_message_cooldowns and current_time - user_message_cooldowns[user_id] < cooldown_seconds:
+        await bot.process_commands(message)
+        return
+    get_account(user_id)
+    activity = get_or_create_daily_activity(user_id)
+    limite_diario = int(get_config_value('limite_diario_chat', '100'))
+    recompensa = int(get_config_value('recompensa_chat', '1'))
+    if activity and activity['moedas_chat'] < limite_diario:
+        conn = get_db_connection()
+        if conn is None: 
+            await bot.process_commands(message)
+            return
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE banco SET saldo = saldo + %s WHERE user_id = %s", (recompensa, user_id))
+            cursor.execute("UPDATE atividade_diaria SET moedas_chat = moedas_chat + %s WHERE user_id = %s AND data = %s", (recompensa, user_id, date.today()))
+            conn.commit()
+        conn.close()
+        registrar_transacao(user_id, "Renda Passiva", recompensa, "Atividade no chat")
+        user_message_cooldowns[user_id] = current_time
+    await bot.process_commands(message)
+
+@bot.event
+async def on_raw_reaction_add(payload):
+    if payload.member.bot: return
+    canal_anuncios_id = int(get_config_value('canal_anuncios', '0'))
+    if payload.channel_id != canal_anuncios_id: return
+    user_id = payload.user_id
+    message_id = payload.message_id
+    recompensa = int(get_config_value('recompensa_reacao', '50'))
+    conn = get_db_connection()
+    if conn is None: return
+    with conn.cursor() as cursor:
+        try:
+            cursor.execute("INSERT INTO reacoes_recompensadas (message_id, user_id) VALUES (%s, %s)", (message_id, user_id))
+            conn.commit()
+            get_account(user_id)
+            cursor.execute("UPDATE banco SET saldo = saldo + %s WHERE user_id = %s", (recompensa, user_id))
+            conn.commit()
+            registrar_transacao(user_id, "Recompensa", recompensa, f"Leitura do anúncio {message_id}")
+        except psycopg2.IntegrityError:
+            conn.rollback()
+    conn.close()
+
+@bot.event
 async def on_member_join(member):
-    """Cria uma conta para novos membros."""
     get_account(member.id)
     registrar_transacao(member.id, "Criação de Conta", 0, "Conta criada ao entrar no servidor.")
     print(f'Conta bancária criada para o novo membro: {member.name}')
-
+    
 # =================================================================================
 # 5. COMANDOS DO BOT
 # =================================================================================
 
-# --- Comandos Gerais (Inalterados) ---
+# --- Comandos Gerais ---
 @bot.command(name='ola')
 async def hello(ctx):
     await ctx.send(f'Olá, {ctx.author.mention}! Eu sou o Arauto Bank, pronto para servir.')
 
-# --- Comandos de Economia (Inalterados) ---
+# --- Comandos de Economia e Lastro ---
 @bot.command(name='saldo')
 async def balance(ctx):
     get_account(ctx.author.id)
@@ -137,7 +272,6 @@ async def balance(ctx):
 
 @bot.command(name='transferir')
 async def transfer(ctx, destinatario: discord.Member, quantidade: int):
-    # (Código inalterado)
     remetente_id = ctx.author.id; destinatario_id = destinatario.id
     if remetente_id == destinatario_id: return await ctx.send("Você não pode transferir para si mesmo.")
     if quantidade <= 0: return await ctx.send("A quantidade deve ser positiva.")
@@ -157,7 +291,6 @@ async def transfer(ctx, destinatario: discord.Member, quantidade: int):
 
 @bot.command(name='extrato')
 async def statement(ctx):
-    # (Código inalterado)
     user_id = ctx.author.id; get_account(user_id)
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
@@ -174,10 +307,24 @@ async def statement(ctx):
             embed.add_field(name=f"**{t['tipo']}** - {data_formatada}", value=f"{cor_valor} **Valor:** {valor_str} moedas\n*_{t['descricao']}_*", inline=False)
     await ctx.send(embed=embed)
 
-# --- Comandos da Loja (Inalterados) ---
+@bot.command(name='lastro')
+async def silver_value(ctx):
+    get_account(ctx.author.id)
+    conn = get_db_connection()
+    if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
+    lastro_prata_str = get_config_value('lastro_prata', '1000'); lastro_prata = int(lastro_prata_str)
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT saldo FROM banco WHERE user_id = %s", (ctx.author.id,)); saldo = cursor.fetchone()[0]
+    conn.close()
+    patrimonio_em_prata = saldo * lastro_prata
+    embed = discord.Embed(title="🏦 Valor de Lastro em Prata", color=discord.Color.light_grey())
+    embed.add_field(name="Taxa de Conversão Atual", value=f"**1** 🪙 moeda do bot = **{lastro_prata:,}** de prata.", inline=False)
+    embed.add_field(name=f"Patrimônio de {ctx.author.display_name}", value=f"O seu saldo de **{saldo:,}** 🪙 moedas equivale a **{patrimonio_em_prata:,}** de prata.", inline=False)
+    await ctx.send(embed=embed)
+
+# --- Comandos da Loja ---
 @bot.command(name='loja')
 async def shop(ctx):
-    # (Código inalterado)
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
@@ -190,7 +337,6 @@ async def shop(ctx):
 
 @bot.command(name='comprar')
 async def buy(ctx, item_id: str):
-    # (Código inalterado)
     comprador_id = ctx.author.id; get_account(comprador_id)
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
@@ -206,11 +352,10 @@ async def buy(ctx, item_id: str):
     canal_staff = discord.utils.get(ctx.guild.channels, name='🚨-staff-resgates')
     if canal_staff: await canal_staff.send(f"⚠️ **Novo Resgate!** {ctx.author.mention} comprou **'{item['nome']}'** (ID: {item_id}).")
 
-# --- Comandos de Eventos (ATUALIZADOS E NOVOS) ---
+# --- Comandos de Eventos ---
 @bot.command(name='criarevento')
-@commands.has_permissions(administrator=True)
+@can_manage_events()
 async def create_event(ctx, recompensa: int, meta: int, *, nome: str):
-    """Cria um novo evento com uma recompensa e uma meta de participação."""
     if recompensa <= 0 or meta <= 0: return await ctx.send("A recompensa e a meta devem ser valores positivos.")
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
@@ -227,7 +372,6 @@ async def create_event(ctx, recompensa: int, meta: int, *, nome: str):
 
 @bot.command(name='listareventos')
 async def list_events(ctx):
-    """Lista todos os eventos ativos."""
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
@@ -242,7 +386,6 @@ async def list_events(ctx):
 
 @bot.command(name='participar')
 async def join_event(ctx, evento_id: int):
-    """Permite que um membro se inscreva para participar de um evento."""
     get_account(ctx.author.id)
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
@@ -257,16 +400,14 @@ async def join_event(ctx, evento_id: int):
     conn.close()
 
 @bot.command(name='confirmar')
-@commands.has_permissions(administrator=True)
+@can_manage_events()
 async def confirm_participation(ctx, evento_id: int, membros: commands.Greedy[discord.Member]):
-    """Confirma a participação de um ou mais membros numa atividade do evento."""
     if not membros: return await ctx.send("Você precisa de mencionar pelo menos um membro para confirmar a participação.")
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
         cursor.execute("SELECT nome, recompensa, meta_participacao FROM eventos WHERE id = %s AND ativo = TRUE", (evento_id,)); evento = cursor.fetchone()
         if evento is None: return await ctx.send("Este evento não existe ou não está ativo.")
-        
         confirmados_msg = []
         for membro in membros:
             cursor.execute("UPDATE participantes SET progresso = progresso + 1 WHERE evento_id = %s AND user_id = %s RETURNING progresso", (evento_id, membro.id))
@@ -276,13 +417,11 @@ async def confirm_participation(ctx, evento_id: int, membros: commands.Greedy[di
                 confirmados_msg.append(f"✅ {membro.mention} (Progresso: {progresso_atual}/{evento['meta_participacao']})")
             else:
                 confirmados_msg.append(f"❌ {membro.mention} (Não está inscrito no evento)")
-        
     conn.close()
     await ctx.send(f"**Confirmação de Participação no Evento '{evento['nome']}':**\n" + "\n".join(confirmados_msg))
 
 @bot.command(name='meuprogresso')
 async def my_progress(ctx, evento_id: int):
-    """Mostra o progresso do membro num evento específico."""
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
@@ -296,22 +435,18 @@ async def my_progress(ctx, evento_id: int):
     await ctx.send(embed=embed)
 
 @bot.command(name='finalizarevento')
-@commands.has_permissions(administrator=True)
+@can_manage_events()
 async def finish_event(ctx, evento_id: int):
-    """Finaliza um evento e distribui as recompensas para quem atingiu a meta."""
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
     with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
         cursor.execute("SELECT nome, recompensa, meta_participacao FROM eventos WHERE id = %s AND ativo = TRUE", (evento_id,)); evento = cursor.fetchone()
         if evento is None: return await ctx.send("Este evento não existe ou já foi finalizado.")
-        
         cursor.execute("SELECT user_id, progresso FROM participantes WHERE evento_id = %s", (evento_id,))
         participantes = cursor.fetchall()
-        
         vencedores = []
         if participantes:
-            recompensa = evento['recompensa']
-            meta = evento['meta_participacao']
+            recompensa = evento['recompensa']; meta = evento['meta_participacao']
             for p in participantes:
                 if p['progresso'] >= meta:
                     user_id = p['user_id']
@@ -319,19 +454,14 @@ async def finish_event(ctx, evento_id: int):
                     registrar_transacao(user_id, "Recompensa de Evento", recompensa, f"Completou o evento '{evento['nome']}'")
                     vencedores.append(f"<@{user_id}>")
             conn.commit()
-        
-        if not vencedores:
-            await ctx.send(f"O evento **'{evento['nome']}'** foi finalizado, mas nenhum participante atingiu a meta de **{evento['meta_participacao']}** participações.")
-        else:
-            await ctx.send(f"🎉 O evento **'{evento['nome']}'** foi finalizado! **{len(vencedores)}** participantes atingiram a meta e receberam **🪙 {evento['recompensa']}** moedas cada!\nParabéns: {', '.join(vencedores)}")
-
+        if not vencedores: await ctx.send(f"O evento **'{evento['nome']}'** foi finalizado, mas nenhum participante atingiu a meta de **{evento['meta_participacao']}** participações.")
+        else: await ctx.send(f"🎉 O evento **'{evento['nome']}'** foi finalizado! **{len(vencedores)}** participantes atingiram a meta e receberam **🪙 {recompensa}** moedas cada!\nParabéns: {', '.join(vencedores)}")
         cursor.execute("DELETE FROM eventos WHERE id = %s", (evento_id,)); conn.commit()
     conn.close()
 
 @bot.command(name='cancelarevento')
-@commands.has_permissions(administrator=True)
+@can_manage_events()
 async def cancel_event(ctx, evento_id: int):
-    # (Código inalterado)
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
     with conn.cursor() as cursor:
@@ -340,11 +470,10 @@ async def cancel_event(ctx, evento_id: int):
     if evento_nome: await ctx.send(f"🗑️ O evento **'{evento_nome[0]}'** (ID: {evento_id}) foi cancelado e removido.")
     else: await ctx.send(f"Não foi encontrado nenhum evento ativo com o ID {evento_id}.")
 
-# --- Comandos de Administração (Inalterados) ---
+# --- Comandos de Administração ---
 @bot.command(name='setup')
 @commands.has_permissions(administrator=True)
 async def setup_server(ctx):
-    # (Código inalterado)
     guild = ctx.guild; categoria_existente = discord.utils.get(guild.categories, name="🪙 BANCO ARAUTO 🪙")
     if categoria_existente: return await ctx.send("⚠️ A estrutura de canais do Arauto Bank já existe.")
     await ctx.send("Iniciando a configuração do servidor..."); categoria = await guild.create_category("🪙 BANCO ARAUTO 🪙")
@@ -359,7 +488,6 @@ async def setup_server(ctx):
 @bot.command(name='addmoedas')
 @commands.has_permissions(administrator=True)
 async def add_coins(ctx, membro: discord.Member, quantidade: int):
-    # (Código inalterado)
     get_account(membro.id); conn = get_db_connection()
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
     with conn.cursor() as cursor:
@@ -367,10 +495,116 @@ async def add_coins(ctx, membro: discord.Member, quantidade: int):
     registrar_transacao(membro.id, "Depósito Admin", quantidade, f"Adicionado por {ctx.author.display_name}"); conn.close()
     await ctx.send(f"🪙 **{quantidade}** moedas foram adicionadas a {membro.mention}. Novo saldo: **{novo_saldo}**.")
 
+@bot.command(name='definirlastro')
+@commands.has_permissions(administrator=True)
+async def set_silver_value(ctx, novo_valor: int):
+    if novo_valor <= 0: return await ctx.send("O valor do lastro deve ser positivo.")
+    set_config_value('lastro_prata', str(novo_valor))
+    await ctx.send(f"✅ O valor do lastro foi atualizado. **1** 🪙 moeda do bot agora vale **{novo_valor:,}** de prata.")
+
+@bot.command(name='definirrecompensa')
+@commands.has_permissions(administrator=True)
+async def set_reward(ctx, tipo: str, valor: int):
+    tipo = tipo.lower()
+    chaves_validas = {'voz': 'recompensa_voz', 'chat': 'recompensa_chat', 'reacao': 'recompensa_reacao'}
+    if tipo not in chaves_validas: return await ctx.send("Tipo de recompensa inválido. Use: `voz`, `chat`, `reacao`.")
+    if valor < 0: return await ctx.send("O valor não pode ser negativo.")
+    set_config_value(chaves_validas[tipo], str(valor))
+    await ctx.send(f"✅ Recompensa para `{tipo}` definida para **{valor}** moedas.")
+
+@bot.command(name='definirlimite')
+@commands.has_permissions(administrator=True)
+async def set_limit(ctx, tipo: str, valor: int):
+    tipo = tipo.lower()
+    chaves_validas = {'voz': 'limite_diario_voz', 'chat': 'limite_diario_chat'}
+    if tipo not in chaves_validas: return await ctx.send("Tipo de limite inválido. Use: `voz`, `chat`.")
+    if valor < 0: return await ctx.send("O valor não pode ser negativo.")
+    unidade = "minutos" if tipo == "voz" else "moedas"
+    set_config_value(chaves_validas[tipo], str(valor))
+    await ctx.send(f"✅ Limite diário para `{tipo}` definido para **{valor}** {unidade}.")
+
+@bot.command(name='definircanal')
+@commands.has_permissions(administrator=True)
+async def set_channel(ctx, tipo: str, canal: discord.TextChannel):
+    tipo = tipo.lower()
+    chaves_validas = {'anuncios': 'canal_anuncios'}
+    if tipo not in chaves_validas: return await ctx.send("Tipo de canal inválido. Use: `anuncios`.")
+    set_config_value(chaves_validas[tipo], str(canal.id))
+    await ctx.send(f"✅ Canal de `{tipo}` definido para {canal.mention}.")
+
+# --- Comandos de Gestão de Cargos (ATUALIZADOS) ---
+@bot.command(name='addcargo')
+@commands.has_permissions(administrator=True)
+async def add_role_permission(ctx, tipo: str, cargo: discord.Role):
+    """Adiciona um cargo à lista de permissões para uma função."""
+    tipo = tipo.lower()
+    chaves_validas = {'eventos': 'cargos_gerente_eventos'}
+    if tipo not in chaves_validas:
+        return await ctx.send("Tipo de permissão inválido. Use: `eventos`.")
+    
+    chave_config = chaves_validas[tipo]
+    ids_atuais_str = get_config_value(chave_config, '')
+    ids_atuais = {id_str for id_str in ids_atuais_str.split(',') if id_str}
+    
+    if str(cargo.id) in ids_atuais:
+        return await ctx.send(f"O cargo {cargo.mention} já tem permissão para gerir `{tipo}`.")
+
+    ids_atuais.add(str(cargo.id))
+    set_config_value(chave_config, ','.join(ids_atuais))
+    await ctx.send(f"✅ O cargo {cargo.mention} agora pode gerir `{tipo}`.")
+
+@bot.command(name='removecargo')
+@commands.has_permissions(administrator=True)
+async def remove_role_permission(ctx, tipo: str, cargo: discord.Role):
+    """Remove um cargo da lista de permissões para uma função."""
+    tipo = tipo.lower()
+    chaves_validas = {'eventos': 'cargos_gerente_eventos'}
+    if tipo not in chaves_validas:
+        return await ctx.send("Tipo de permissão inválido. Use: `eventos`.")
+
+    chave_config = chaves_validas[tipo]
+    ids_atuais_str = get_config_value(chave_config, '')
+    ids_atuais = {id_str for id_str in ids_atuais_str.split(',') if id_str}
+
+    if str(cargo.id) not in ids_atuais:
+        return await ctx.send(f"O cargo {cargo.mention} não tem permissão para gerir `{tipo}`.")
+        
+    ids_atuais.remove(str(cargo.id))
+    set_config_value(chave_config, ','.join(ids_atuais))
+    await ctx.send(f"🗑️ O cargo {cargo.mention} já não pode gerir `{tipo}`.")
+
+@bot.command(name='listacargos')
+@commands.has_permissions(administrator=True)
+async def list_role_permissions(ctx, tipo: str):
+    """Lista todos os cargos com permissão para uma função."""
+    tipo = tipo.lower()
+    chaves_validas = {'eventos': 'cargos_gerente_eventos'}
+    if tipo not in chaves_validas:
+        return await ctx.send("Tipo de permissão inválido. Use: `eventos`.")
+
+    chave_config = chaves_validas[tipo]
+    ids_atuais_str = get_config_value(chave_config, '')
+    
+    if not ids_atuais_str:
+        return await ctx.send(f"Nenhum cargo está configurado para gerir `{tipo}`.")
+
+    ids_atuais = [int(id_str) for id_str in ids_atuais_str.split(',') if id_str]
+    cargos_mencionados = []
+    for role_id in ids_atuais:
+        cargo = ctx.guild.get_role(role_id)
+        if cargo:
+            cargos_mencionados.append(cargo.mention)
+    
+    if not cargos_mencionados:
+        return await ctx.send(f"Nenhum dos cargos configurados para gerir `{tipo}` foi encontrado no servidor.")
+        
+    await ctx.send(f"**Cargos com permissão para gerir `{tipo}`:**\n" + ", ".join(cargos_mencionados))
+
+# (Comando !definircargo removido para dar lugar aos novos)
+
 @bot.command(name='additem')
 @commands.has_permissions(administrator=True)
 async def add_item_to_shop(ctx, item_id: str, preco: int, nome: str, *, descricao: str):
-    # (Código inalterado)
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
     with conn.cursor() as cursor:
@@ -383,7 +617,6 @@ async def add_item_to_shop(ctx, item_id: str, preco: int, nome: str, *, descrica
 @bot.command(name='delitem')
 @commands.has_permissions(administrator=True)
 async def delete_item_from_shop(ctx, item_id: str):
-    # (Código inalterado)
     conn = get_db_connection();
     if conn is None: return await ctx.send("Erro de conexão com a base de dados.")
     with conn.cursor() as cursor:
