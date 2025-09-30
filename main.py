@@ -157,7 +157,10 @@ async def voice_channel_rewards():
     await bot.wait_until_ready()
     recompensa_por_hora = int(get_config_value('recompensa_voz', '10'))
     limite_minutos_diario = int(get_config_value('limite_diario_voz', '120'))
-    recompensa_por_ciclo = (recompensa_por_hora / 60) * 5
+    recompensa_por_ciclo = round((recompensa_por_hora / 60) * 5)
+    
+    if recompensa_por_ciclo < 1: return
+
     for guild in bot.guilds:
         for member in guild.members:
             if member.voice and not member.voice.self_mute and not member.voice.self_deaf:
@@ -258,7 +261,7 @@ async def transfer(ctx, destinatario: discord.Member, quantidade: int):
     embed = discord.Embed(title="💸 Transferência Realizada", description=f"**{ctx.author.display_name}** transferiu **🪙 {quantidade}** para **{destinatario.display_name}**.", color=discord.Color.green())
     await ctx.send(embed=embed)
 
-# --- COMANDO DE EXTRATO ATUALIZADO ---
+# --- COMANDO DE EXTRATO CORRIGIDO ---
 @bot.command(name='extrato')
 async def statement(ctx, data_str: str = None):
     """Mostra o resumo de ganhos e as transações de um dia específico ou as mais recentes."""
@@ -284,24 +287,28 @@ async def statement(ctx, data_str: str = None):
                     f"**Chat:** 💬 +{total_ganho_chat} moedas")
     embed.add_field(name=f"Resumo de Renda ({display_date.strftime('%d/%m/%Y')})", value=resumo_renda, inline=False)
     
-    # Busca as transações importantes
+    # Busca as transações importantes, filtrando a renda passiva
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
             if target_date:
-                cursor.execute("SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND DATE(data) = %s ORDER BY data DESC", (user_id, target_date))
+                cursor.execute("SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND DATE(data) = %s AND tipo NOT IN ('Renda Passiva') ORDER BY data DESC", (user_id, target_date))
             else:
-                cursor.execute("SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s ORDER BY data DESC LIMIT 5", (user_id,))
+                cursor.execute("SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND tipo NOT IN ('Renda Passiva') ORDER BY data DESC LIMIT 5", (user_id,))
             transacoes = cursor.fetchall()
 
     # Adiciona as outras transações
     if not transacoes:
-        embed.add_field(name="Transações Detalhadas", value="Nenhuma transação registada.", inline=False)
+        embed.add_field(name="Transações Detalhadas", value="Nenhuma transação importante para mostrar.", inline=False)
     else:
+        title = "Últimas Transações Detalhadas" if not target_date else f"Transações Detalhadas ({target_date.strftime('%d/%m/%Y')})"
+        list_of_transactions = []
         for t in transacoes:
             valor_str = f"+{t['valor']}" if t['valor'] > 0 else str(t['valor'])
             cor_valor = "🟢" if t['valor'] > 0 else ("🔴" if t['valor'] < 0 else "⚪")
             data_formatada = t['data'].strftime('%d/%m/%Y %H:%M')
-            embed.add_field(name=f"**{t['tipo']}** - {data_formatada}", value=f"{cor_valor} **Valor:** {valor_str} moedas\n*_{t['descricao']}_*", inline=False)
+            list_of_transactions.append(f"**{t['tipo']}** - {data_formatada}\n{cor_valor} **Valor:** {valor_str} moedas\n*_{t['descricao']}_*")
+        
+        embed.add_field(name=title, value="\n\n".join(list_of_transactions), inline=False)
             
     await ctx.send(embed=embed)
 
