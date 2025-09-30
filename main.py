@@ -132,11 +132,11 @@ async def on_ready():
 # 5. COMANDOS DO BOT
 # =================================================================================
 
-# --- COMANDO !SETUP v3.1 (ESTRUTURA FINAL) ---
+# --- COMANDO !SETUP v3.2 (FINAL E CORRIGIDO) ---
 @bot.command(name='setup')
 @commands.has_permissions(administrator=True)
 async def setup_server(ctx):
-    """Apaga a estrutura antiga e cria a estrutura de canais final para o bot."""
+    """Apaga a estrutura antiga e cria a estrutura de canais final e otimizada para o bot."""
     guild = ctx.guild
     await ctx.send("⚠️ **AVISO:** Este comando irá apagar e recriar as categorias do Arauto Bank. A ação é irreversível.\nDigite `confirmar wipe` para prosseguir.")
     
@@ -145,7 +145,7 @@ async def setup_server(ctx):
     try: await bot.wait_for('message', timeout=30.0, check=check)
     except asyncio.TimeoutError: return await ctx.send("Comando cancelado.")
 
-    msg_progresso = await ctx.send("🔥 Confirmado! A iniciar a reconstrução... (0/3)")
+    msg_progresso = await ctx.send("🔥 Confirmado! A iniciar a reconstrução... (0/10)")
 
     # --- Apaga a estrutura antiga ---
     category_names_to_delete = ["🏦 ARAUTO BANK", "💸 TAXA SEMANAL", "⚙️ ADMINISTRAÇÃO"]
@@ -154,7 +154,7 @@ async def setup_server(ctx):
             for channel in category.channels: await channel.delete()
             await category.delete()
     
-    await msg_progresso.edit(content="🔥 A iniciar a reconstrução... (1/3)")
+    await msg_progresso.edit(content="🔥 A iniciar a reconstrução... (1/10)")
 
     # --- Lógica de Permissões ---
     perm_nivel_4_id = int(get_config_value('perm_nivel_4', '0'))
@@ -165,10 +165,15 @@ async def setup_server(ctx):
     }
     if perm_nivel_4_role: admin_overwrites[perm_nivel_4_role] = discord.PermissionOverwrite(view_channel=True)
 
-    # --- Função Auxiliar para Criar e Fixar ---
+    # --- Função Auxiliar para Criar e Fixar (CORRIGIDA) ---
     async def create_and_pin(category, name, embed, overwrites=None):
         try:
-            channel = await category.create_text_channel(name, overwrites=overwrites)
+            # A correção está aqui: passamos `overwrites` apenas se ele for um dict.
+            if overwrites:
+                channel = await category.create_text_channel(name, overwrites=overwrites)
+            else:
+                channel = await category.create_text_channel(name)
+                
             msg = await channel.send(embed=embed)
             await msg.pin()
             return channel
@@ -181,50 +186,63 @@ async def setup_server(ctx):
 
     # 1. Categoria Principal: ARAUTO BANK
     cat_principal = await guild.create_category("🏦 ARAUTO BANK")
+    await msg_progresso.edit(content="🔥 A iniciar a reconstrução... (2/10)")
     
-    # Canais Públicos
-    embed_tutorial = discord.Embed(title="🎓 Como Usar o Arauto Bank", description="Bem-vindo ao sistema económico da guilda!", color=0xffd700)
-    embed_tutorial.add_field(name="Comandos Essenciais", value=("• `!saldo`\n• `!extrato`\n• `!loja`\n• `!rank`\n• `!listareventos`"), inline=False)
+    # Canais Públicos com mensagens detalhadas
+    embed_tutorial = discord.Embed(title="🎓 Como Usar o Arauto Bank", description="Bem-vindo ao sistema económico da guilda! O nosso lema é **Prova de Participação**: as suas contribuições geram valor.", color=0xffd700)
+    embed_tutorial.add_field(name="O que é a Moeda Arauto (🪙)?", value="É a nossa moeda interna, com valor real lastreado em Prata. Você ganha-a ao participar em atividades e pode trocá-la por itens e benefícios na `!loja`.", inline=False)
+    embed_tutorial.add_field(name="Comandos Essenciais", value=("• `!saldo` - Veja o seu dinheiro.\n• `!extrato` - Acompanhe as suas transações.\n• `!loja` - Descubra as recompensas.\n• `!rank` - Veja os mais ricos!\n• `!listareventos` - Encontre missões."), inline=False)
     await create_and_pin(cat_principal, "🎓 | como-usar-o-bot", embed_tutorial, {guild.default_role: discord.PermissionOverwrite(send_messages=False)})
+    await msg_progresso.edit(content="🔥 A iniciar a reconstrução... (3/10)")
 
-    embed_mercado = discord.Embed(title="📈 Mercado Financeiro", description="A nossa moeda é lastreada em Prata. Entenda o seu valor.", color=0x1abc9c)
-    embed_mercado.add_field(name="O que é o Lastro?", value="Significa que para cada moeda, existe Prata (🥈) guardada no tesouro. Use `!infomoeda` para ver os detalhes!", inline=False)
+    embed_mercado = discord.Embed(title="📈 Mercado Financeiro", description="A Moeda Arauto (🪙) não é apenas um número, ela tem um valor real e tangível, garantido pelo tesouro da guilda.", color=0x1abc9c)
+    embed_mercado.add_field(name="O que é o Lastro?", value="Significa que para cada moeda em circulação, existe uma quantidade correspondente de Prata (🥈) guardada no cofre. Isto garante que a moeda nunca perde o seu valor e que a economia é estável.", inline=False)
+    embed_mercado.add_field(name="Porque isto é bom para si?", value="Ter moedas é como ter uma parte do tesouro da guilda. Quanto mais a guilda prospera e aumenta o seu lastro, mais forte a nossa economia se torna. Use `!infomoeda` para ver os detalhes!", inline=False)
     ch_mercado = await create_and_pin(cat_principal, "📈 | mercado-financeiro", embed_mercado, {guild.default_role: discord.PermissionOverwrite(send_messages=False)})
     if ch_mercado: set_config_value('canal_mercado', str(ch_mercado.id))
+    await msg_progresso.edit(content="🔥 A iniciar a reconstrução... (4/10)")
 
-    embed_conta = discord.Embed(title="💰 Minha Conta", description="Use os comandos `!saldo` e `!extrato` para gerir as suas finanças.", color=0x2ecc71)
+    embed_conta = discord.Embed(title="💰 Minha Conta", description="Use este canal para todos os comandos relacionados com a sua carteira pessoal.", color=0x2ecc71)
+    embed_conta.add_field(name="Comandos Disponíveis", value="• `!saldo`\n• `!extrato [dd/mm/aaaa]`\n• `!transferir @membro <valor>`", inline=False)
     await create_and_pin(cat_principal, "💰 | minha-conta", embed_conta)
+    await msg_progresso.edit(content="🔥 A iniciar a reconstrução... (5/10)")
 
-    embed_loja = discord.Embed(title="🛍️ Loja da Guilda", description="Use `!loja` para ver os itens e `!comprar <id>` para adquirir.", color=0x3498db)
+    embed_loja = discord.Embed(title="🛍️ Loja da Guilda", description="Aqui você pode gastar as suas moedas! Use os comandos abaixo.", color=0x3498db)
+    embed_loja.add_field(name="Comandos Disponíveis", value="• `!loja`\n• `!comprar <id_do_item>`", inline=False)
     await create_and_pin(cat_principal, "🛍️ | loja-da-guilda", embed_loja)
     
-    embed_eventos = discord.Embed(title="🏆 Eventos e Missões", description="Use `!listareventos` para ver as missões ativas e `!participar <id>` para se inscrever.", color=0xe91e63)
+    embed_eventos = discord.Embed(title="🏆 Eventos e Missões", description="Participe nos conteúdos da guilda e seja recompensado!", color=0xe91e63)
+    embed_eventos.add_field(name="Comandos Disponíveis", value="• `!listareventos`\n• `!participar <id_do_evento>`\n• `!meuprogresso <id_do_evento>`", inline=False)
     await create_and_pin(cat_principal, "🏆 | eventos-e-missões", embed_eventos)
 
-    embed_orbes = discord.Embed(title="🔮 Submissão de Orbes", description="Use `!orbe <cor> <@membros...>` e anexe o print para ganhar recompensas.", color=0x9b59b6)
+    embed_orbes = discord.Embed(title="🔮 Submissão de Orbes", description="Use este canal para submeter as suas capturas de orbes e ganhar recompensas!", color=0x9b59b6)
+    embed_orbes.add_field(name="Como usar?", value="Use o comando `!orbe <cor> <@membros...>` e **anexe o print** na mesma mensagem.", inline=False)
     ch_orbes = await create_and_pin(cat_principal, "🔮 | submeter-orbes", embed_orbes)
     if ch_orbes: set_config_value('canal_orbes', str(ch_orbes.id))
-    await msg_progresso.edit(content="🔥 A iniciar a reconstrução... (2/3)")
+    await msg_progresso.edit(content="🔥 A iniciar a reconstrução... (6/10)")
     
     # 2. Categoria de Taxas
     cat_taxas = await guild.create_category("💸 TAXA SEMANAL")
     embed_info_taxa = discord.Embed(title="ℹ️ Como Funciona a Taxa", description="Um sistema para garantir a manutenção e o crescimento da nossa guilda.", color=0x7f8c8d)
     embed_info_taxa.add_field(name="Como Regularizar?", value=("Use `!pagar-taxa` ou `!paguei-prata` no canal `🪙 | pagamento-de-taxas`."), inline=False)
     await create_and_pin(cat_taxas, "ℹ️ | como-funciona-a-taxa", embed_info_taxa, {guild.default_role: discord.PermissionOverwrite(send_messages=False)})
-    
+    await msg_progresso.edit(content="🔥 A iniciar a reconstrução... (7/10)")
+
     embed_pagamento = discord.Embed(title="🪙 Pagamento de Taxas", description="Se o seu acesso for restrito, use `!pagar-taxa` ou `!paguei-prata` aqui.", color=0x95a5a6)
     await create_and_pin(cat_taxas, "🪙 | pagamento-de-taxas", embed_pagamento)
-
-    # 3. Categoria de Administração (MOVENDO CANAIS PARA CÁ)
+    await msg_progresso.edit(content="🔥 A iniciar a reconstrução... (8/10)")
+    
+    # 3. Categoria de Administração
     cat_admin = await guild.create_category("⚙️ ADMINISTRAÇÃO", overwrites=admin_overwrites)
     embed_aprovacao = discord.Embed(title="✅ Aprovações", description="Aqui aparecerão as submissões de orbes e pagamentos de taxa.", color=0xf1c40f)
     ch_aprovacao = await create_and_pin(cat_admin, "✅ | aprovações", embed_aprovacao)
     if ch_aprovacao: set_config_value('canal_aprovacao', str(ch_aprovacao.id))
+    await msg_progresso.edit(content="🔥 A iniciar a reconstrução... (9/10)")
     
     embed_comandos = discord.Embed(title="🔩 Comandos Admin", description="Use este canal para todos os comandos de gestão.", color=0xe67e22)
     await create_and_pin(cat_admin, "🔩 | comandos-admin", embed_comandos)
     
-    await msg_progresso.edit(content="✅ Estrutura de canais final criada e configurada com sucesso!")
+    await msg_progresso.edit(content="✅ Estrutura de canais final criada e configurada com sucesso! (10/10)")
 
 # (Todos os outros comandos permanecem exatamente iguais e são omitidos por brevidade)
 
