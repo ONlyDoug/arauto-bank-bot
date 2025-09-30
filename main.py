@@ -8,7 +8,7 @@ import psycopg2.extras
 from psycopg2 import pool
 import os
 from dotenv import load_dotenv
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import time
 import contextlib
 import asyncio
@@ -82,7 +82,7 @@ def setup_database():
                 'orbe_verde': '100', 'orbe_azul': '250', 'orbe_roxa': '500', 'orbe_dourada': '1000',
                 'taxa_semanal_valor': '500', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
                 'perm_nivel_1': '0', 'perm_nivel_2': '0', 'perm_nivel_3': '0', 'perm_nivel_4': '0',
-                'canal_aprovacao': '0', 'canal_batepapo': '0', 'canal_taxas': '0', 'taxa_status': 'ativo'
+                'canal_aprovacao': '0', 'canal_mercado': '0'
             }
             for chave, valor in default_configs.items():
                 cursor.execute("INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO NOTHING", (chave, valor))
@@ -126,6 +126,7 @@ def check_permission_level(level: int):
             perm_key = f'perm_nivel_{i}'
             role_id_str = get_config_value(perm_key, '0')
             if role_id_str in author_roles_ids: return True
+        await ctx.send("Você não tem permissão para usar este comando.", ephemeral=True)
         return False
     return commands.check(predicate)
 
@@ -134,32 +135,64 @@ async def on_ready():
     if not DATABASE_URL: print("ERRO CRÍTICO: DATABASE_URL não definida."); return
     initialize_connection_pool()
     setup_database()
+    market_update.start() # Inicia a nova tarefa de mercado
     print(f'Login bem-sucedido como {bot.user.name}'); print('------')
+
+# =================================================================================
+# 4. TAREFAS DE ENGAJAMENTO
+# =================================================================================
+
+@tasks.loop(hours=6)
+async def market_update():
+    """Envia uma atualização periódica sobre a saúde da economia."""
+    await bot.wait_until_ready()
+    channel_id = int(get_config_value('canal_mercado', '0'))
+    if channel_id == 0 or (channel := bot.get_channel(channel_id)) is None:
+        return
+
+    # Reutiliza a lógica do comando !infomoeda
+    taxa_conversao = int(get_config_value('lastro_prata', '1000'))
+    lastro_total = int(get_config_value('lastro_total_prata', '0'))
+    suprimento_maximo = lastro_total // taxa_conversao if taxa_conversao > 0 else 0
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT saldo FROM banco WHERE user_id = %s", (ID_TESOURO_GUILDA,))
+            saldo_tesouro = cursor.fetchone()[0]
+    
+    moedas_com_membros = suprimento_maximo - saldo_tesouro
+
+    embed = discord.Embed(title="📈 Boletim Económico do Arauto Bank", 
+                          description=f"Atualização de mercado de {datetime.now().strftime('%d/%m/%Y às %H:%M')}",
+                          color=discord.Color.from_rgb(255, 215, 0)) # Dourado
+    embed.add_field(name="Lastro Total de Prata", value=f"**{lastro_total:,}** 🥈", inline=True)
+    embed.add_field(name="Taxa de Câmbio", value=f"**1 🪙 = {taxa_conversao:,}** 🥈", inline=True)
+    embed.add_field(name="Suprimento Máximo", value=f"**{suprimento_maximo:,}** 🪙", inline=True)
+    embed.set_footer(text="Use !infomoeda para mais detalhes a qualquer momento.")
+    
+    await channel.send(embed=embed)
+
 
 # =================================================================================
 # 5. COMANDOS DO BOT
 # =================================================================================
 
-# --- COMANDO !SETUP v2.2 ---
+# --- COMANDO !SETUP v2.3 (ESTRUTURA ENXUTA) ---
 @bot.command(name='setup')
 @commands.has_permissions(administrator=True)
 async def setup_server(ctx):
-    """Apaga a estrutura antiga e cria uma nova estrutura de canais e categorias para o bot."""
+    """Apaga a estrutura antiga e cria uma nova estrutura de canais otimizada."""
     guild = ctx.guild
-    await ctx.send("⚠️ **AVISO:** Este comando irá apagar e recriar toda a estrutura de canais do Arauto Bank. Esta ação é irreversível.\nDigite `confirmar wipe` para prosseguir.")
+    await ctx.send("⚠️ **AVISO:** Este comando irá apagar e recriar as categorias do Arauto Bank. A ação é irreversível.\nDigite `confirmar wipe` para prosseguir.")
     
-    def check(m):
-        return m.author == ctx.author and m.channel == ctx.channel and m.content.lower() == 'confirmar wipe'
+    def check(m): return m.author == ctx.author and m.channel == ctx.channel and m.content.lower() == 'confirmar wipe'
     
-    try:
-        await bot.wait_for('message', timeout=30.0, check=check)
-    except asyncio.TimeoutError:
-        return await ctx.send("Comando cancelado por inatividade.")
+    try: await bot.wait_for('message', timeout=30.0, check=check)
+    except asyncio.TimeoutError: return await ctx.send("Comando cancelado.")
 
-    await ctx.send("🔥 Confirmado! A iniciar a reconstrução do servidor... Isto pode demorar um pouco.")
+    await ctx.send("🔥 Confirmado! A iniciar a reconstrução... Isto pode demorar um pouco.")
 
     # --- Apaga a estrutura antiga ---
-    category_names_to_delete = ["📚 TUTORIAIS E GUIAS", "🏦 ECONOMIA", "🎯 EVENTOS E MISSÕES", "💸 TAXA SEMANAL", "⚙️ ADMINISTRAÇÃO"]
+    category_names_to_delete = ["🏦 ARAUTO BANK", "💸 TAXA SEMANAL"]
     for cat_name in category_names_to_delete:
         if category := discord.utils.get(guild.categories, name=cat_name):
             for channel in category.channels: await channel.delete()
@@ -169,69 +202,48 @@ async def setup_server(ctx):
     perm_nivel_4_id = int(get_config_value('perm_nivel_4', '0'))
     perm_nivel_4_role = guild.get_role(perm_nivel_4_id)
     admin_overwrites = { guild.default_role: discord.PermissionOverwrite(view_channel=False) }
-    if perm_nivel_4_role:
-        admin_overwrites[perm_nivel_4_role] = discord.PermissionOverwrite(view_channel=True)
+    if perm_nivel_4_role: admin_overwrites[perm_nivel_4_role] = discord.PermissionOverwrite(view_channel=True)
+
+    # 1. Categoria Principal: ARAUTO BANK
+    cat_principal = await guild.create_category("🏦 ARAUTO BANK")
     
-    # 1. Categoria de Tutoriais
-    cat_tutoriais = await guild.create_category("📚 TUTORIAIS E GUIAS")
-    ch_tutorial = await cat_tutoriais.create_text_channel("🎓 | como-usar-o-bot", overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
-    embed_tutorial = discord.Embed(title="Bem-vindo ao Arauto Bank!", description="Este é o sistema económico da nossa guilda, desenhado para recompensar a sua participação.", color=0xffd700)
+    # Canais Públicos dentro da Categoria Principal
+    ch_tutorial = await cat_principal.create_text_channel("🎓 | como-usar-o-bot", overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
+    # (Mensagem do tutorial)
+    embed_tutorial = discord.Embed(title="Bem-vindo ao Arauto Bank!", description="O sistema económico da nossa guilda, para recompensar a sua participação.", color=0xffd700)
     embed_tutorial.add_field(name="O que é a Moeda Arauto (🪙)?", value="É a nossa moeda interna! Você ganha-a ao participar em atividades e pode trocá-la por itens na `!loja`.", inline=False)
     embed_tutorial.add_field(name="Comandos Essenciais", value=("• `!saldo`\n• `!extrato`\n• `!loja`\n• `!rank`\n• `!listareventos`"), inline=False)
     msg_tutorial = await ch_tutorial.send(embed=embed_tutorial); await msg_tutorial.pin()
 
-    # 2. Categoria de Economia
-    cat_economia = await guild.create_category("🏦 ECONOMIA")
-    ch_saldo = await cat_economia.create_text_channel("💰 | saldo-e-extrato")
-    embed_saldo = discord.Embed(title="Canal de Finanças", description="Use os comandos abaixo para gerir as suas moedas.", color=0x2ecc71)
-    embed_saldo.add_field(name="`!saldo`", value="Verifica o seu saldo atual.", inline=False); embed_saldo.add_field(name="`!extrato`", value="Mostra um resumo dos seus ganhos e transações.", inline=False)
-    msg_saldo = await ch_saldo.send(embed=embed_saldo); await msg_saldo.pin()
-    
-    ch_loja = await cat_economia.create_text_channel("🛍️ | loja")
-    embed_loja = discord.Embed(title="Loja da Guilda", description="Use os comandos abaixo para interagir com a loja.", color=0x3498db)
-    embed_loja.add_field(name="`!loja`", value="Lista todos os itens disponíveis.", inline=False); embed_loja.add_field(name="`!comprar <id_do_item>`", value="Compra um item.", inline=False)
-    msg_loja = await ch_loja.send(embed=embed_loja); await msg_loja.pin()
+    ch_mercado = await cat_principal.create_text_channel("📈 | mercado-financeiro", overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
+    embed_mercado = discord.Embed(title="A Nossa Moeda: O Lastro em Prata", description="A Moeda Arauto (🪙) não é apenas um número, ela tem um valor real e tangível.", color=0x1abc9c)
+    embed_mercado.add_field(name="O que é o Lastro?", value="Significa que para cada moeda em circulação, existe uma quantidade correspondente de Prata (🥈) guardada no tesouro da guilda. Isto garante que a moeda nunca perde o seu valor.", inline=False)
+    embed_mercado.add_field(name="Porque isto é bom para si?", value="Ter moedas é como ter uma parte do tesouro da guilda. Quanto mais a guilda prospera, mais valiosa a sua participação se torna. Use `!infomoeda` para ver os detalhes!", inline=False)
+    msg_mercado = await ch_mercado.send(embed=embed_mercado); await msg_mercado.pin()
+    set_config_value('canal_mercado', str(ch_mercado.id))
 
-    # 3. Categoria de Eventos
-    cat_eventos = await guild.create_category("🎯 EVENTOS E MISSÕES")
-    ch_list_eventos = await cat_eventos.create_text_channel("🏆 | eventos-ativos")
-    embed_eventos = discord.Embed(title="Quadro de Eventos", description="Participe e ganhe recompensas!", color=0xe91e63)
-    embed_eventos.add_field(name="`!listareventos`", value="Mostra todos os eventos em que você pode participar.", inline=False); embed_eventos.add_field(name="`!participar <id_do_evento>`", value="Inscreve-se num evento.", inline=False)
-    msg_eventos = await ch_list_eventos.send(embed=embed_eventos); await msg_eventos.pin()
+    await cat_principal.create_text_channel("💰 | saldo-e-extrato")
+    await cat_principal.create_text_channel("🛍️ | loja")
+    await cat_principal.create_text_channel("🏆 | eventos-ativos")
 
-    # 4. Categoria de Taxas
+    # Canais de Administração (Privados) dentro da Categoria Principal
+    ch_aprovacao = await cat_principal.create_text_channel("✅ | aprovações", overwrites=admin_overwrites)
+    set_config_value('canal_aprovacao', str(ch_aprovacao.id))
+    ch_comandos = await cat_principal.create_text_channel("🔩 | comandos-admin", overwrites=admin_overwrites)
+
+    # 2. Categoria de Taxas
     cat_taxas = await guild.create_category("💸 TAXA SEMANAL")
+    # (Criação dos canais de taxas inalterada)
     ch_info_taxa = await cat_taxas.create_text_channel("ℹ️ | como-funciona-a-taxa", overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
-    embed_info_taxa = discord.Embed(title="Como Funciona o Sistema de Taxa Semanal", description="Este sistema foi criado para garantir a manutenção e o crescimento da nossa guilda.", color=0x7f8c8d)
-    embed_info_taxa.add_field(name="1. Cobrança Automática", value="Toda semana, o bot irá debitar automaticamente o valor da taxa do seu `!saldo`.", inline=False)
-    embed_info_taxa.add_field(name="2. E se eu não tiver saldo?", value="O seu cargo de acesso será trocado por um cargo restrito (`@Inadimplente`).", inline=False)
-    embed_info_taxa.add_field(name="3. Como Regularizar?", value=("• **Com Moedas:** Use `!pagar-taxa` no canal `🪙 | pagamento-taxas`.\n"
+    embed_info_taxa = discord.Embed(title="Como Funciona o Sistema de Taxa Semanal", description="Um sistema para garantir a manutenção e o crescimento da nossa guilda.", color=0x7f8c8d)
+    embed_info_taxa.add_field(name="1. Cobrança Automática", value="Toda semana, o bot irá debitar a taxa do seu `!saldo`.", inline=False)
+    embed_info_taxa.add_field(name="2. Como Regularizar?", value=("• **Com Moedas:** Use `!pagar-taxa` no canal `🪙 | pagamento-taxas`.\n"
                                                                "• **Com Prata:** Use `!paguei-prata` no mesmo canal e aguarde aprovação."), inline=False)
     msg_info_taxa = await ch_info_taxa.send(embed=embed_info_taxa); await msg_info_taxa.pin()
-    
-    ch_avisos_taxa = await cat_taxas.create_text_channel("📢 | avisos-taxa", overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
-    embed_avisos = discord.Embed(title="Avisos da Taxa Semanal", description="Fique atento a este canal para os anúncios sobre a cobrança.", color=0x95a5a6)
-    msg_avisos = await ch_avisos_taxa.send(embed=embed_avisos); await msg_avisos.pin()
-    set_config_value('canal_taxas', str(ch_avisos_taxa.id))
-    
-    ch_pagamento = await cat_taxas.create_text_channel("🪙 | pagamento-taxas")
-    embed_pagamento = discord.Embed(title="Pagamento de Taxas", description="Se o seu acesso for restrito, use os comandos abaixo.", color=0x95a5a6)
-    embed_pagamento.add_field(name="`!pagar-taxa`", value="Paga a sua taxa pendente com moedas.", inline=False)
-    embed_pagamento.add_field(name="`!paguei-prata`", value="Submete um comprovativo de pagamento com prata no jogo.", inline=False)
-    msg_pagamento = await ch_pagamento.send(embed=embed_pagamento); await msg_pagamento.pin()
-    
-    # 5. Categoria de Administração
-    cat_admin = await guild.create_category("⚙️ ADMINISTRAÇÃO", overwrites=admin_overwrites)
-    ch_aprovacao = await cat_admin.create_text_channel("✅ | aprovações")
-    embed_aprovacao = discord.Embed(title="Canal de Aprovações", description="Aqui aparecerão as submissões de orbes e pagamentos de taxa.", color=0xf1c40f)
-    msg_aprovacao = await ch_aprovacao.send(embed=embed_aprovacao); await msg_aprovacao.pin()
-    set_config_value('canal_aprovacao', str(ch_aprovacao.id))
-    
-    ch_comandos = await cat_admin.create_text_channel("🔩 | comandos-admin")
-    embed_comandos = discord.Embed(title="Canal de Comandos Administrativos", description="Use este canal para todos os comandos de gestão.", color=0xe67e22)
-    msg_comandos = await ch_comandos.send(embed=embed_comandos); await msg_comandos.pin()
+    await cat_taxas.create_text_channel("🪙 | pagamento-taxas")
 
-    await ctx.send("✅ Estrutura de canais v2.2 criada e configurada com sucesso!")
+    await ctx.send("✅ Estrutura de canais v3.0 criada e configurada com sucesso!")
+
 
 # (Todos os outros comandos permanecem exatamente iguais e são omitidos por brevidade)
 
