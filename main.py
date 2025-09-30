@@ -5,12 +5,12 @@ import discord
 from discord.ext import commands, tasks
 import psycopg2
 import psycopg2.extras
-from psycopg2 import pool # NOVA IMPORTAÇÃO para o Pool de Conexões
+from psycopg2 import pool # Para o Pool de Conexões
 import os
 from dotenv import load_dotenv
 from datetime import datetime, date
 import time
-import contextlib # Nova importação para gerir o contexto da conexão
+import contextlib # Para gerir o contexto da conexão
 
 # Carrega as variáveis de ambiente
 load_dotenv()
@@ -64,7 +64,6 @@ def setup_database():
     """Inicializa a base de dados, criando todas as tabelas se não existirem."""
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
-            # (O resto da função permanece igual)
             cursor.execute("CREATE TABLE IF NOT EXISTS banco (user_id BIGINT PRIMARY KEY, saldo INTEGER NOT NULL DEFAULT 0)")
             cursor.execute("CREATE TABLE IF NOT EXISTS loja (item_id TEXT PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
             cursor.execute("""
@@ -95,7 +94,6 @@ def setup_database():
         conn.commit()
     print("Base de dados Supabase verificada e pronta.")
 
-# (As outras funções de BD são atualizadas para usar o novo `get_db_connection`)
 def get_config_value(chave: str, default: str = None):
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
@@ -131,7 +129,6 @@ def get_or_create_daily_activity(user_id: int, target_date: date):
             if activity is None:
                 cursor.execute("INSERT INTO atividade_diaria (user_id, data) VALUES (%s, %s) ON CONFLICT (user_id, data) DO NOTHING", (user_id, target_date))
                 conn.commit()
-                # É preciso buscar novamente após a inserção
                 cursor.execute("SELECT * FROM atividade_diaria WHERE user_id = %s AND data = %s", (user_id, target_date))
                 activity = cursor.fetchone()
     return activity
@@ -172,14 +169,13 @@ async def voice_channel_rewards():
                             cursor.execute("UPDATE banco SET saldo = saldo + %s WHERE user_id = %s", (recompensa_por_ciclo, member.id))
                             cursor.execute("UPDATE atividade_diaria SET minutos_voz = minutos_voz + 5 WHERE user_id = %s AND data = %s", (member.id, date.today()))
                             conn.commit()
-                    # A transação não é mais registada individualmente
 
 @bot.event
 async def on_ready():
     if not DATABASE_URL:
         print("ERRO CRÍTICO: A variável de ambiente DATABASE_URL não foi definida.")
         return
-    initialize_connection_pool() # Inicializa o pool de conexões
+    initialize_connection_pool()
     setup_database()
     voice_channel_rewards.start()
     print(f'Login bem-sucedido como {bot.user.name}')
@@ -207,17 +203,35 @@ async def on_message(message):
         user_message_cooldowns[user_id] = current_time
     await bot.process_commands(message)
 
-# (Resto dos eventos e comandos permanecem os mesmos, mas agora usam a função otimizada `get_db_connection`)
-# ... (código completo com todos os comandos restaurados) ...
+@bot.event
+async def on_raw_reaction_add(payload):
+    if payload.member.bot: return
+    canal_anuncios_id = int(get_config_value('canal_anuncios', '0'))
+    if payload.channel_id != canal_anuncios_id: return
+    user_id = payload.user_id; message_id = payload.message_id
+    recompensa = int(get_config_value('recompensa_reacao', '50'))
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            try:
+                cursor.execute("INSERT INTO reacoes_recompensadas (message_id, user_id) VALUES (%s, %s)", (message_id, user_id)); conn.commit()
+                get_account(user_id)
+                cursor.execute("UPDATE banco SET saldo = saldo + %s WHERE user_id = %s", (recompensa, user_id)); conn.commit()
+                registrar_transacao(user_id, "Recompensa", recompensa, f"Leitura do anúncio {message_id}")
+            except psycopg2.IntegrityError:
+                conn.rollback()
 
+@bot.event
+async def on_member_join(member):
+    get_account(member.id)
+    registrar_transacao(member.id, "Criação de Conta", 0, "Conta criada ao entrar no servidor.")
+    print(f'Conta bancária criada para o novo membro: {member.name}')
+    
 # =================================================================================
 # 5. COMANDOS DO BOT
 # =================================================================================
-# --- Comandos Gerais ---
 @bot.command(name='ola')
 async def hello(ctx): await ctx.send(f'Olá, {ctx.author.mention}! Eu sou o Arauto Bank, pronto para servir.')
 
-# --- Comandos de Economia e Lastro ---
 @bot.command(name='saldo')
 async def balance(ctx):
     get_account(ctx.author.id)
@@ -244,33 +258,53 @@ async def transfer(ctx, destinatario: discord.Member, quantidade: int):
     embed = discord.Embed(title="💸 Transferência Realizada", description=f"**{ctx.author.display_name}** transferiu **🪙 {quantidade}** para **{destinatario.display_name}**.", color=discord.Color.green())
     await ctx.send(embed=embed)
 
+# --- COMANDO DE EXTRATO ATUALIZADO ---
 @bot.command(name='extrato')
 async def statement(ctx, data_str: str = None):
+    """Mostra o resumo de ganhos e as transações de um dia específico ou as mais recentes."""
     user_id = ctx.author.id
-    target_date = date.today()
+    target_date = None
     if data_str:
         try: target_date = datetime.strptime(data_str, '%d/%m/%Y').date()
         except ValueError: return await ctx.send("Formato de data inválido. Use `DD/MM/AAAA`.")
+    
     get_account(user_id)
-    activity = get_or_create_daily_activity(user_id, target_date)
+
+    # Define a data para o resumo diário (hoje, por defeito)
+    display_date = target_date if target_date else date.today()
+    
+    embed = discord.Embed(title=f"Extrato de {ctx.author.display_name}", color=discord.Color.blue())
+    
+    # Busca e adiciona o resumo de renda diária
+    activity = get_or_create_daily_activity(user_id, display_date)
     recompensa_voz_hora = int(get_config_value('recompensa_voz', '10'))
     total_ganho_voz = (activity['minutos_voz'] / 60) * recompensa_voz_hora
     total_ganho_chat = activity['moedas_chat']
-    with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
-            cursor.execute("""SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND DATE(data) = %s AND tipo NOT IN ('Renda Passiva') ORDER BY data DESC""", (user_id, target_date))
-            transacoes = cursor.fetchall()
-    embed = discord.Embed(title=f"Extrato de {ctx.author.display_name} - {target_date.strftime('%d/%m/%Y')}", color=discord.Color.blue())
     resumo_renda = (f"**Voz:** 🗣️ +{int(total_ganho_voz)} moedas ({activity['minutos_voz']} minutos)\n"
                     f"**Chat:** 💬 +{total_ganho_chat} moedas")
-    embed.add_field(name="Resumo de Renda Diária", value=resumo_renda, inline=False)
-    if not transacoes: embed.add_field(name="Outras Transações", value="Nenhuma outra transação neste dia.", inline=False)
+    embed.add_field(name=f"Resumo de Renda ({display_date.strftime('%d/%m/%Y')})", value=resumo_renda, inline=False)
+    
+    # Busca as transações importantes
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+            if target_date:
+                cursor.execute("SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND DATE(data) = %s ORDER BY data DESC", (user_id, target_date))
+            else:
+                cursor.execute("SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s ORDER BY data DESC LIMIT 5", (user_id,))
+            transacoes = cursor.fetchall()
+
+    # Adiciona as outras transações
+    if not transacoes:
+        embed.add_field(name="Transações Detalhadas", value="Nenhuma transação registada.", inline=False)
     else:
         for t in transacoes:
-            valor_str = f"+{t['valor']}" if t['valor'] > 0 else str(t['valor']); cor_valor = "🟢" if t['valor'] > 0 else ("🔴" if t['valor'] < 0 else "⚪")
-            data_formatada = t['data'].strftime('%H:%M')
+            valor_str = f"+{t['valor']}" if t['valor'] > 0 else str(t['valor'])
+            cor_valor = "🟢" if t['valor'] > 0 else ("🔴" if t['valor'] < 0 else "⚪")
+            data_formatada = t['data'].strftime('%d/%m/%Y %H:%M')
             embed.add_field(name=f"**{t['tipo']}** - {data_formatada}", value=f"{cor_valor} **Valor:** {valor_str} moedas\n*_{t['descricao']}_*", inline=False)
+            
     await ctx.send(embed=embed)
+
 
 @bot.command(name='lastro')
 async def silver_value(ctx):
@@ -285,7 +319,6 @@ async def silver_value(ctx):
     embed.add_field(name=f"Patrimônio de {ctx.author.display_name}", value=f"O seu saldo de **{saldo:,}** 🪙 moedas equivale a **{patrimonio_em_prata:,}** de prata.", inline=False)
     await ctx.send(embed=embed)
 
-# --- Comandos da Loja ---
 @bot.command(name='loja')
 async def shop(ctx):
     with get_db_connection() as conn:
@@ -311,7 +344,6 @@ async def buy(ctx, item_id: str):
     canal_staff = discord.utils.get(ctx.guild.channels, name='🚨-staff-resgates')
     if canal_staff: await canal_staff.send(f"⚠️ **Novo Resgate!** {ctx.author.mention} comprou **'{item['nome']}'** (ID: {item_id}).")
 
-# --- Comandos de Eventos (RESTAURADOS) ---
 @bot.command(name='criarevento')
 @can_manage_events()
 async def create_event(ctx, recompensa: int, meta: int, *, nome: str):
@@ -413,7 +445,6 @@ async def cancel_event(ctx, evento_id: int):
     if evento_nome: await ctx.send(f"🗑️ O evento **'{evento_nome[0]}'** (ID: {evento_id}) foi cancelado e removido.")
     else: await ctx.send(f"Não foi encontrado nenhum evento ativo com o ID {evento_id}.")
 
-# --- Comandos de Administração ---
 @bot.command(name='setup')
 @commands.has_permissions(administrator=True)
 async def setup_server(ctx):
