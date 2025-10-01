@@ -35,7 +35,7 @@ class ArautoBankBot(commands.Bot):
         Ela carrega todas as extensões (Cogs) da pasta 'cogs'.
         """
         print("A carregar extensões (Cogs)...")
-        cogs_to_load = ['economia', 'eventos', 'admin', 'ajuda']
+        cogs_to_load = ['economia', 'eventos', 'admin', 'ajuda', 'listeners']
         for cog_name in cogs_to_load:
             try:
                 await self.load_extension(f'cogs.{cog_name}')
