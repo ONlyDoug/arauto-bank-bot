@@ -6,8 +6,6 @@ from psycopg2 import pool
 import os
 import contextlib
 from datetime import datetime, date
-import time
-import random
 
 # Funções auxiliares de BD
 DATABASE_URL = os.getenv('DATABASE_URL')
@@ -50,47 +48,10 @@ def registrar_transacao(user_id: int, tipo: str, valor: int, descricao: str):
         with conn.cursor() as cursor:
             cursor.execute("INSERT INTO transacoes (user_id, tipo, valor, descricao) VALUES (%s, %s, %s, %s)", (user_id, tipo, valor, descricao)); conn.commit()
 
-def get_or_create_daily_activity(user_id: int, target_date: date):
-    with get_db_connection() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
-            cursor.execute("SELECT * FROM atividade_diaria WHERE user_id = %s AND data = %s", (user_id, target_date))
-            activity = cursor.fetchone()
-            if activity is None:
-                cursor.execute("INSERT INTO atividade_diaria (user_id, data) VALUES (%s, %s) ON CONFLICT (user_id, data) DO NOTHING", (user_id, target_date)); conn.commit()
-                cursor.execute("SELECT * FROM atividade_diaria WHERE user_id = %s AND data = %s", (user_id, target_date)); activity = cursor.fetchone()
-    return activity
-
 class Economia(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         initialize_cog_connection_pool()
-        self.user_message_cooldowns = {}
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        if message.author.bot: return
-
-        ctx = await self.bot.get_context(message)
-        if ctx.valid: return
-
-        user_id = message.author.id
-        current_time = time.time()
-        cooldown_seconds = int(get_config_value('cooldown_chat', '60'))
-        
-        if user_id in self.user_message_cooldowns and current_time - self.user_message_cooldowns[user_id] < cooldown_seconds:
-            return
-        
-        get_account(user_id)
-        activity = get_or_create_daily_activity(user_id, date.today())
-        limite_diario = int(get_config_value('limite_diario_chat', '100'))
-        recompensa = int(get_config_value('recompensa_chat', '1'))
-        
-        if activity and activity['moedas_chat'] < limite_diario:
-            with get_db_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute("UPDATE banco SET saldo = saldo + %s WHERE user_id = %s", (recompensa, user_id))
-                    cursor.execute("UPDATE atividade_diaria SET moedas_chat = moedas_chat + %s WHERE user_id = %s AND data = %s", (recompensa, user_id, date.today())); conn.commit()
-            self.user_message_cooldowns[user_id] = current_time
 
     @commands.command(name='saldo')
     async def balance(self, ctx):
@@ -101,8 +62,7 @@ class Economia(commands.Cog):
                 cursor.execute("SELECT saldo FROM banco WHERE user_id = %s", (ctx.author.id,)); saldo = cursor.fetchone()[0]
         embed = discord.Embed(title=f"Saldo de {ctx.author.display_name}", description=f"Você possui **{saldo:,}** 🪙.", color=discord.Color.gold())
         await ctx.send(embed=embed)
-    
-    # (Resto dos comandos de economia)
+
     @commands.command(name='transferir')
     async def transfer(self, ctx, destinatario: discord.Member, quantidade: int):
         remetente_id = ctx.author.id; destinatario_id = destinatario.id
@@ -159,7 +119,6 @@ class Economia(commands.Cog):
                 cursor.execute("UPDATE banco SET saldo = saldo + %s WHERE user_id = %s", (item['preco'], ID_TESOURO_GUILDA)); conn.commit()
                 registrar_transacao(comprador_id, "Compra na Loja", -item['preco'], f"Comprou '{item['nome']}'")
         await ctx.send(f"🎉 Parabéns, {ctx.author.mention}! Você comprou **{item['nome']}** por **{item['preco']:,}** 🪙.")
-        # (Lógica de notificação da staff omitida por brevidade)
 
 async def setup(bot):
     await bot.add_cog(Economia(bot))
