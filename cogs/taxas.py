@@ -11,9 +11,9 @@ class TaxaPrataView(discord.ui.View):
         self.bot = bot
 
     async def handle_interaction(self, interaction: discord.Interaction, status: str):
-        perm_check = await check_permission_level(2).predicate(interaction)
-        if not perm_check:
-            return await interaction.response.send_message("Você não tem permissão para esta ação.", ephemeral=True)
+        # A verificação de permissão agora funciona corretamente com interações
+        if not await check_permission_level(2)(interaction):
+            return
 
         message_id = interaction.message.id
         
@@ -37,17 +37,17 @@ class TaxaPrataView(discord.ui.View):
             new_embed.title = "✅ Pagamento Aprovado"
             new_embed.color = discord.Color.green()
             new_embed.clear_fields()
-            new_embed.add_field(name="Membro", value=membro.mention)
+            new_embed.add_field(name="Membro", value=membro.mention if membro else f'ID: {user_id}')
             new_embed.add_field(name="Status", value=f"Aprovado por {interaction.user.mention}")
         else: # recusado
             new_embed.title = "❌ Pagamento Recusado"
             new_embed.color = discord.Color.red()
             new_embed.clear_fields()
-            new_embed.add_field(name="Membro", value=membro.mention)
+            new_embed.add_field(name="Membro", value=membro.mention if membro else f'ID: {user_id}')
             new_embed.add_field(name="Status", value=f"Recusado por {interaction.user.mention}")
 
         await interaction.message.edit(embed=new_embed, view=None)
-        await interaction.response.send_message(f"Submissão de {membro.display_name} marcada como `{status}`.", ephemeral=True)
+        await interaction.response.send_message(f"Submissão de {membro.display_name if membro else 'ID:'+str(user_id)} marcada como `{status}`.", ephemeral=True)
 
     @discord.ui.button(label="Aprovar", style=discord.ButtonStyle.green, custom_id="aprovar_taxa_prata_button")
     async def aprovar_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -61,6 +61,7 @@ class TaxaPrataView(discord.ui.View):
     def get_db_connection(self):
         conn = None
         try:
+            # Acessa o pool de conexões através da instância do bot
             conn = self.bot.db_pool.getconn()
             yield conn
         finally:
@@ -71,6 +72,7 @@ class Taxas(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.cobrar_taxa.start()
+        # Adiciona a view de forma persistente na inicialização do bot
         self.bot.add_view(TaxaPrataView(bot))
 
     def cog_unload(self):
@@ -108,8 +110,9 @@ class Taxas(commands.Cog):
         embed.add_field(name="Membro", value=ctx.author.mention)
         embed.set_footer(text="Ação requerida: Verificar o pagamento no jogo e aprovar/recusar.")
         
-        view = TaxaPrataView(self.bot)
-        msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
+        # A view já é persistente, não precisa criar uma nova instância aqui
+        # view = TaxaPrataView(self.bot) 
+        msg_aprovacao = await canal_aprovacao.send(embed=embed, view=TaxaPrataView(self.bot))
 
         with self.get_db_connection() as conn:
             with conn.cursor() as cursor:
@@ -119,9 +122,13 @@ class Taxas(commands.Cog):
                 )
             conn.commit()
 
-        await ctx.send("✅ O seu comprovativo foi enviado para aprovação. Por favor, aguarde.", delete_after=15)
+        await ctx.send("✅ O seu comprovativo foi enviado para aprovação. Por favor, aguarde.", delete_after=1.5)
         # Apaga a mensagem do usuário para manter o canal limpo
-        await ctx.message.delete()
+        await asyncio.sleep(1)
+        try:
+            await ctx.message.delete()
+        except discord.NotFound:
+            pass # A mensagem pode já ter sido apagada
 
     async def regularizar_membro(self, membro: discord.Member):
         if not membro: return
@@ -140,9 +147,9 @@ class Taxas(commands.Cog):
                                (date.today() + timedelta(days=7), membro.id))
             conn.commit()
     
-    # ... (restante do código)
     @tasks.loop(hours=24)
     async def cobrar_taxa(self):
+        # Implementação futura da lógica de cobrança
         pass
 
     @cobrar_taxa.before_loop
