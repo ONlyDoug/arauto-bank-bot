@@ -26,26 +26,28 @@ class Utilidades(commands.Cog):
 
     @commands.command(name='extrato')
     async def extrato(self, ctx, data_str: str = None):
-        """Mostra o extrato de um dia específico, incluindo ganhos passivos."""
+        """Mostra o extrato de um dia específico, incluindo um resumo de ganhos passivos."""
         target_date = None
         if data_str:
             try:
+                # Tenta analisar a data no formato AAAA-MM-DD
                 target_date = datetime.strptime(data_str, '%Y-%m-%d').date()
             except ValueError:
-                return await ctx.send("Formato de data inválido. Use AAAA-MM-DD.")
+                return await ctx.send("Formato de data inválido. Use `AAAA-MM-DD` ou deixe em branco para ver o dia de hoje.")
         else:
+            # Se nenhuma data for fornecida, usa a data atual
             target_date = date.today()
 
         with self.get_db_connection() as conn:
             with conn.cursor() as cursor:
-                # Buscar ganhos passivos do dia
+                # 1. Buscar o resumo de ganhos passivos para o dia
                 cursor.execute(
                     "SELECT minutos_voz, moedas_chat FROM atividade_diaria WHERE user_id = %s AND data = %s",
                     (ctx.author.id, target_date)
                 )
                 ganhos_passivos = cursor.fetchone()
                 
-                # Buscar outras transações do dia
+                # 2. Buscar todas as outras transações para o dia
                 start_of_day = datetime.combine(target_date, datetime.min.time())
                 end_of_day = datetime.combine(target_date, datetime.max.time())
                 cursor.execute(
@@ -63,40 +65,44 @@ class Utilidades(commands.Cog):
             color=discord.Color.blue()
         )
 
-        # Adicionar resumo de ganhos passivos
+        # 3. Adicionar o campo de resumo de ganhos passivos
         if ganhos_passivos:
             minutos_voz, moedas_chat = ganhos_passivos
             admin_cog = self.bot.get_cog('Admin')
-            recompensa_voz = int(admin_cog.get_config_value('recompensa_voz', '0'))
+            recompensa_voz_por_ciclo = int(admin_cog.get_config_value('recompensa_voz', '0'))
             
-            moedas_voz = (minutos_voz // 5) * recompensa_voz
+            moedas_voz = (minutos_voz // 5) * recompensa_voz_por_ciclo
             
-            passivo_desc = []
+            resumo_passivo = []
             if moedas_voz > 0:
-                passivo_desc.append(f"🎙️ Voz: `{moedas_voz}`")
+                resumo_passivo.append(f"🎙️ **Voz:** `{moedas_voz}`")
             if moedas_chat > 0:
-                passivo_desc.append(f"💬 Chat: `{moedas_chat}`")
+                resumo_passivo.append(f"💬 **Chat:** `{moedas_chat}`")
             
-            if passivo_desc:
+            if resumo_passivo:
                  embed.add_field(
                     name="Resumo de Ganhos Passivos do Dia",
-                    value=" | ".join(passivo_desc),
+                    value=" | ".join(resumo_passivo),
                     inline=False
                 )
 
-        # Adicionar transações individuais
+        # 4. Adicionar as transações individuais
         if transacoes:
-            trans_desc = []
+            lista_transacoes = []
             for tipo, valor, descricao, data in transacoes:
                 timestamp = int(data.timestamp())
                 emoji = "📥" if valor > 0 else "📤"
                 valor_formatado = f"{valor:,}".replace(',', '.')
-                trans_desc.append(f"{emoji} **{valor_formatado} GC** às <t:{timestamp}:T> | *{descricao or tipo}*")
+                # Omite descrição se for genérica de renda passiva
+                desc_final = f"*({descricao})*" if descricao and "passiva" not in tipo else ""
+                lista_transacoes.append(f"{emoji} **{valor_formatado} GC** às <t:{timestamp}:T> | `{tipo}` {desc_final}")
             
-            if trans_desc:
-                embed.add_field(name="Transações do Dia", value="\n".join(trans_desc), inline=False)
-        else:
-             embed.add_field(name="Transações do Dia", value="Nenhuma transação registada.", inline=False)
+            if lista_transacoes:
+                embed.add_field(name="\nTransações do Dia", value="\n".join(lista_transacoes), inline=False)
+        
+        # Se não houver transações mas houver ganhos passivos, informa.
+        elif not transacoes and ganhos_passivos:
+            embed.add_field(name="\nTransações do Dia", value="Nenhuma transação ativa registada.", inline=False)
 
         await ctx.send(embed=embed)
 

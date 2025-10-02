@@ -111,13 +111,13 @@ class Admin(commands.Cog):
         }
         if perm_4: admin_overwrites[perm_4] = discord.PermissionOverwrite(view_channel=True)
 
-        # Função auxiliar corrigida
+        # Função auxiliar corrigida para evitar o erro de TypeError
         async def create_and_pin(category, name, embed, overwrites=None, set_config_key=None):
-            channel_options = {'name': name}
-            if overwrites:
+            channel_options = {}
+            if overwrites is not None:
                 channel_options['overwrites'] = overwrites
             
-            channel = await category.create_text_channel(**channel_options)
+            channel = await category.create_text_channel(name, **channel_options)
             await asyncio.sleep(2)
             msg = await channel.send(embed=embed)
             await msg.pin()

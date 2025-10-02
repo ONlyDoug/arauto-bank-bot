@@ -51,6 +51,7 @@ class Economia(commands.Cog):
 
     @commands.command(name='transferir')
     async def transferir(self, ctx, membro: discord.Member, valor: int):
+        """Transfere moedas para outro membro, usando Embeds para uma melhor UX."""
         if membro.bot or membro == ctx.author:
             embed = discord.Embed(title="❌ Transferência Inválida", description="Você não pode transferir moedas para si mesmo ou para um bot.", color=discord.Color.red())
             return await ctx.send(embed=embed)
@@ -66,11 +67,11 @@ class Economia(commands.Cog):
         await self.update_saldo(ctx.author.id, -valor, "transferencia_enviada", f"Para {membro.name}")
         await self.update_saldo(membro.id, valor, "transferencia_recebida", f"De {ctx.author.name}")
 
-        embed = discord.Embed(title="✅ Transferência Realizada", color=discord.Color.green())
-        embed.add_field(name="De", value=ctx.author.mention, inline=True)
-        embed.add_field(name="Para", value=membro.mention, inline=True)
+        embed = discord.Embed(title="✅ Transferência Realizada com Sucesso", color=discord.Color.green())
+        embed.add_field(name="Enviado de", value=ctx.author.mention, inline=True)
+        embed.add_field(name="Recebido por", value=membro.mention, inline=True)
         embed.add_field(name="Valor", value=f"🪙 {valor:,}".replace(',', '.'), inline=True)
-        embed.set_footer(text=f"ID da Transação pode ser consultado no extrato.")
+        embed.set_footer(text="A transação foi registada no seu extrato.")
         await ctx.send(embed=embed)
 
     @commands.command(name='emitir')
