@@ -36,14 +36,12 @@ class Economia(commands.Cog):
 
     @commands.command(name='saldo')
     async def saldo(self, ctx, membro: discord.Member = None):
-        """Mostra o seu saldo ou o de outro membro com uma estética melhorada."""
         target_user = membro or ctx.author
         saldo_user = await self.get_saldo(target_user.id)
         
         embed = discord.Embed(
-            color=0xFFD700  # Cor dourada
+            color=0xFFD700
         )
-        # Título com o cargo mais alto (se houver) e o nome
         cargo_principal = target_user.top_role.name if target_user.top_role.name != "@everyone" else "Membro"
         embed.set_author(name=f"Saldo de [{cargo_principal}] {target_user.display_name}", icon_url=target_user.display_avatar.url)
         embed.description = f"Você possui 🪙 **{saldo_user:,}** moedas.".replace(',', '.')
@@ -54,18 +52,26 @@ class Economia(commands.Cog):
     @commands.command(name='transferir')
     async def transferir(self, ctx, membro: discord.Member, valor: int):
         if membro.bot or membro == ctx.author:
-            return await ctx.send("Transferência inválida.")
+            embed = discord.Embed(title="❌ Transferência Inválida", description="Você não pode transferir moedas para si mesmo ou para um bot.", color=discord.Color.red())
+            return await ctx.send(embed=embed)
         if valor <= 0:
-            return await ctx.send("O valor deve ser positivo.")
+            embed = discord.Embed(title="❌ Valor Inválido", description="O valor da transferência deve ser positivo.", color=discord.Color.red())
+            return await ctx.send(embed=embed)
 
         saldo_autor = await self.get_saldo(ctx.author.id)
         if saldo_autor < valor:
-            return await ctx.send("Você não tem saldo suficiente.")
+            embed = discord.Embed(title="❌ Saldo Insuficiente", description=f"Você não tem `{valor:,}` moedas para transferir.".replace(',', '.'), color=discord.Color.red())
+            return await ctx.send(embed=embed)
 
         await self.update_saldo(ctx.author.id, -valor, "transferencia_enviada", f"Para {membro.name}")
         await self.update_saldo(membro.id, valor, "transferencia_recebida", f"De {ctx.author.name}")
 
-        await ctx.send(f"✅ Você transferiu `{valor:,} GC` para {membro.mention}.".replace(',', '.'))
+        embed = discord.Embed(title="✅ Transferência Realizada", color=discord.Color.green())
+        embed.add_field(name="De", value=ctx.author.mention, inline=True)
+        embed.add_field(name="Para", value=membro.mention, inline=True)
+        embed.add_field(name="Valor", value=f"🪙 {valor:,}".replace(',', '.'), inline=True)
+        embed.set_footer(text=f"ID da Transação pode ser consultado no extrato.")
+        await ctx.send(embed=embed)
 
     @commands.command(name='emitir')
     @check_permission_level(3)

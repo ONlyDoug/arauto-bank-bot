@@ -9,6 +9,7 @@ class Admin(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    # ... (funções de BD permanecem iguais) ...
     @contextlib.contextmanager
     def get_db_connection(self):
         conn = None
@@ -53,7 +54,6 @@ class Admin(commands.Cog):
                     cursor.execute("""CREATE TABLE IF NOT EXISTS reacoes_recompensadas (message_id BIGINT, user_id BIGINT, 
                         PRIMARY KEY (message_id, user_id))""")
 
-                    # Valores padrão ajustados conforme especificação
                     default_configs = {
                         'lastro_total_prata': '100000000', 'taxa_conversao_prata': '1000',
                         'taxa_semanal_valor': '500', 'cargo_membro': '0', 'cargo_inadimplente': '0',
@@ -79,6 +79,7 @@ class Admin(commands.Cog):
         await self.initialize_database_schema()
         await ctx.send("✅ Verificação da base de dados concluída.")
 
+
     @commands.command(name='setup')
     @commands.has_permissions(administrator=True)
     async def setup_server(self, ctx):
@@ -98,7 +99,7 @@ class Admin(commands.Cog):
         for cat_name in ["🏦 ARAUTO BANK", "💸 TAXA SEMANAL", "⚙️ ADMINISTRAÇÃO"]:
             if category := discord.utils.get(guild.categories, name=cat_name):
                 for channel in category.channels: await channel.delete()
-                await asyncio.sleep(2) # Aumento do delay para evitar rate limit
+                await asyncio.sleep(2)
                 await category.delete()
         await prog_msg.edit(content="🔥 **A iniciar reconstrução total...** (1/5)")
 
@@ -110,9 +111,14 @@ class Admin(commands.Cog):
         }
         if perm_4: admin_overwrites[perm_4] = discord.PermissionOverwrite(view_channel=True)
 
+        # Função auxiliar corrigida
         async def create_and_pin(category, name, embed, overwrites=None, set_config_key=None):
-            channel = await category.create_text_channel(name, overwrites=overwrites)
-            await asyncio.sleep(2) # Aumento do delay para evitar rate limit
+            channel_options = {'name': name}
+            if overwrites:
+                channel_options['overwrites'] = overwrites
+            
+            channel = await category.create_text_channel(**channel_options)
+            await asyncio.sleep(2)
             msg = await channel.send(embed=embed)
             await msg.pin()
             if set_config_key: self.set_config_value(set_config_key, str(channel.id))
@@ -122,7 +128,7 @@ class Admin(commands.Cog):
         await prog_msg.edit(content="🔥 **A iniciar reconstrução total...** (2/5)")
 
         embed = discord.Embed(title="🎓 Bem-vindo ao Arauto Bank!", color=0xffd700, description="O sistema económico da nossa guilda, baseado no princípio de **Prova de Participação**.")
-        await create_and_pin(cat_bank, "🎓｜como-usar-o-bot", embed, {guild.default_role: discord.PermissionOverwrite(send_messages=False)})
+        await create_and_pin(cat_bank, "🎓｜como-usar-o-bot", embed, overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
         
         embed = discord.Embed(title="📈 Mercado Financeiro", color=0x1abc9c, description="A nossa economia é **lastreada em Prata**.")
         await create_and_pin(cat_bank, "📈｜mercado-financeiro", embed)
@@ -143,7 +149,7 @@ class Admin(commands.Cog):
         await prog_msg.edit(content="🔥 **A iniciar reconstrução total...** (3/5)")
         
         embed = discord.Embed(title="ℹ️ Como Funciona a Taxa Semanal", color=0x7f8c8d, description="Um sistema para a manutenção da guilda.")
-        await create_and_pin(cat_taxas, "ℹ️｜como-funciona-a-taxa", embed, {guild.default_role: discord.PermissionOverwrite(send_messages=False)})
+        await create_and_pin(cat_taxas, "ℹ️｜como-funciona-a-taxa", embed, overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
 
         embed = discord.Embed(title="🪙 Pagamento de Taxas", color=0x95a5a6, description="Utilize este canal para regularizar a sua situação.")
         await create_and_pin(cat_taxas, "🪙｜pagamento-de-taxas", embed)
