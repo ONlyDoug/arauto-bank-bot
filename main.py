@@ -12,21 +12,19 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 
 # Lista de Cogs a serem carregados
 COGS_A_CARREGAR = [
-    'cogs.admin',
     'cogs.economia',
     'cogs.eventos',
     'cogs.loja',
     'cogs.taxas',
     'cogs.engajamento',
-    'cogs.orbes' # <-- NOVO COG ADICIONADO
+    'cogs.orbes',
+    'cogs.utilidades'
 ]
 
 class ArautoBankBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.db_pool = None
-        # Flag para garantir que as views persistentes são adicionadas apenas uma vez
-        self.persistent_views_added = False
 
     async def setup_hook(self):
         """Gancho assíncrono que é executado antes do bot fazer login."""
@@ -42,7 +40,26 @@ class ArautoBankBot(commands.Bot):
             await self.close()
             return
 
-        # 2. Carregar todos os Cogs
+        # 2. Carregar o Cog de Admin primeiro
+        try:
+            await self.load_extension('cogs.admin')
+            print("Cog 'cogs.admin' carregado com sucesso.")
+        except Exception as e:
+            print(f"ERRO CRÍTICO ao carregar 'cogs.admin': {e}")
+            await self.close()
+            return
+            
+        # 3. Inicializar o esquema da base de dados automaticamente
+        admin_cog = self.get_cog('Admin')
+        if admin_cog:
+            print("A inicializar o esquema da base de dados...")
+            await admin_cog.initialize_database_schema()
+        else:
+            print("ERRO CRÍTICO: Não foi possível obter o Cog de Admin para inicializar a base de dados.")
+            await self.close()
+            return
+
+        # 4. Carregar os restantes Cogs
         for cog in COGS_A_CARREGAR:
             try:
                 await self.load_extension(cog)
@@ -73,7 +90,7 @@ def main():
     intents.messages = True
     intents.message_content = True
     intents.reactions = True
-    intents.voice_states = True # Necessário para monitorizar canais de voz
+    intents.voice_states = True
 
     # Cria a instância do bot
     bot = ArautoBankBot(command_prefix='!', intents=intents, case_insensitive=True)
