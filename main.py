@@ -11,6 +11,7 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 # Lista de Cogs a serem carregados
+# O admin deve ser carregado à parte primeiro no setup_hook
 COGS_A_CARREGAR = [
     'cogs.economia',
     'cogs.eventos',

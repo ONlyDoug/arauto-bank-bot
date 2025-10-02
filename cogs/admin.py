@@ -22,10 +22,6 @@ class Admin(commands.Cog):
             if conn:
                 self.bot.db_pool.putconn(conn)
 
-    # =================================================================================
-    # Funções Auxiliares de Base de Dados
-    # =================================================================================
-
     def get_config_value(self, chave: str, default: str = None):
         with self.get_db_connection() as conn:
             with conn.cursor() as cursor:
@@ -39,16 +35,11 @@ class Admin(commands.Cog):
                 cursor.execute("INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor", (chave, valor))
             conn.commit()
 
-    # =================================================================================
-    # Lógica de Inicialização da Base de Dados
-    # =================================================================================
-    
     async def initialize_database_schema(self):
         """Garante que todas as tabelas e configurações padrão existam na base de dados."""
         try:
             with self.get_db_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Estrutura de tabelas
                     cursor.execute("CREATE TABLE IF NOT EXISTS banco (user_id BIGINT PRIMARY KEY, saldo BIGINT NOT NULL DEFAULT 0)")
                     cursor.execute("""CREATE TABLE IF NOT EXISTS transacoes (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL,
                         valor BIGINT NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)""")
@@ -87,19 +78,13 @@ class Admin(commands.Cog):
     @commands.command(name='initdb')
     @commands.has_permissions(administrator=True)
     async def setup_database_command(self, ctx):
-        """(Admin) Comando para verificar e configurar manualmente a base de dados."""
         await ctx.send("A verificar e configurar a base de dados...")
         await self.initialize_database_schema()
         await ctx.send("✅ Verificação da base de dados concluída.")
-        
-    # =================================================================================
-    # Comando de Setup Melhorado
-    # =================================================================================
-    
+
     @commands.command(name='setup')
     @commands.has_permissions(administrator=True)
     async def setup_server(self, ctx):
-        """(Admin) Apaga a estrutura antiga e cria a estrutura de canais final para o bot, com mensagens detalhadas."""
         guild = ctx.guild
         await ctx.send("⚠️ **AVISO:** Este comando irá apagar e recriar TODAS as categorias e canais do Arauto Bank. A ação é irreversível.\nDigite `confirmar wipe` para prosseguir.")
 
@@ -113,14 +98,13 @@ class Admin(commands.Cog):
 
         prog_msg = await ctx.send("🔥 **A iniciar reconstrução total...** (0/5)")
 
-        # --- 1. Apagar Estrutura Antiga ---
         for cat_name in ["🏦 ARAUTO BANK", "💸 TAXA SEMANAL", "⚙️ ADMINISTRAÇÃO"]:
             if category := discord.utils.get(guild.categories, name=cat_name):
                 for channel in category.channels: await channel.delete()
+                await asyncio.sleep(1)
                 await category.delete()
         await prog_msg.edit(content="🔥 **A iniciar reconstrução total...** (1/5)")
 
-        # --- 2. Lógica de Permissões ---
         perm_nivel_4_id = int(self.get_config_value('perm_nivel_4', '0'))
         perm_4 = guild.get_role(perm_nivel_4_id) if perm_nivel_4_id != 0 else None
         admin_overwrites = {
@@ -129,79 +113,72 @@ class Admin(commands.Cog):
         }
         if perm_4: admin_overwrites[perm_4] = discord.PermissionOverwrite(view_channel=True)
 
-        # --- 3. Função Auxiliar de Criação ---
         async def create_and_pin(category, name, embed, overwrites=None, set_config_key=None):
             channel = await category.create_text_channel(name, overwrites=overwrites)
+            await asyncio.sleep(1)
             msg = await channel.send(embed=embed)
             await msg.pin()
             if set_config_key: self.set_config_value(set_config_key, str(channel.id))
             return channel
 
-        # --- 4. Criação da Estrutura ---
-        # CATEGORIA: ARAUTO BANK
         cat_bank = await guild.create_category("🏦 ARAUTO BANK")
         await prog_msg.edit(content="🔥 **A iniciar reconstrução total...** (2/5)")
 
-        # Canais do ARAUTO BANK
         embed = discord.Embed(title="🎓 Bem-vindo ao Arauto Bank!", color=0xffd700, description="O sistema económico da nossa guilda, baseado no princípio de **Prova de Participação**.")
-        embed.add_field(name="Como funciona?", value="Tudo o que você faz para ajudar a guilda (participar em eventos, estar ativo no chat e em canais de voz) gera **GuildCoins (GC)**, a nossa moeda interna.", inline=False)
-        embed.add_field(name="Comandos Essenciais", value="`!saldo` - Ver o seu dinheiro\n`!extrato` - Ver as suas últimas transações\n`!loja` - Ver os itens disponíveis\n`!info-moeda` - Ver a saúde da economia", inline=False)
+        embed.add_field(name="Como funciona?", value="Tudo o que você faz para ajudar a guilda gera **GuildCoins (GC)**, a nossa moeda interna.", inline=False)
+        embed.add_field(name="Comandos Essenciais", value="`!saldo`, `!extrato`, `!loja`, `!info-moeda`", inline=False)
         await create_and_pin(cat_bank, "🎓｜como-usar-o-bot", embed, {guild.default_role: discord.PermissionOverwrite(send_messages=False)})
-
-        embed = discord.Embed(title="📈 Mercado Financeiro", color=0x1abc9c, description="A nossa economia é **lastreada em Prata**, o que significa que a nossa moeda tem valor real.")
-        embed.add_field(name="O que é o Lastro?", value="Significa que para uma quantidade de GuildCoins em circulação, existe uma quantidade de Prata guardada no tesouro da guilda. Isso impede a inflação e garante que a moeda seja forte.", inline=False)
-        embed.add_field(name="Comando Útil", value="Use `!info-moeda` ou `!lastro` neste canal para ver o estado atual da economia, incluindo o total de prata no tesouro e a taxa de conversão.", inline=False)
+        
+        embed = discord.Embed(title="📈 Mercado Financeiro", color=0x1abc9c, description="A nossa economia é **lastreada em Prata**.")
+        embed.add_field(name="O que é o Lastro?", value="Significa que a nossa moeda tem valor real e não pode ser criada infinitamente.", inline=False)
+        embed.add_field(name="Comando Útil", value="Use `!info-moeda` ou `!lastro` para ver o estado atual da economia.", inline=False)
         await create_and_pin(cat_bank, "📈｜mercado-financeiro", embed)
-
-        embed = discord.Embed(title="💰 Saldo e Extrato", color=0x2ecc71, description="Utilize este canal para consultar as suas finanças pessoais.")
-        embed.add_field(name="!saldo [@membro]", value="Verifica o seu saldo de GuildCoins ou o de outro membro.", inline=False)
-        embed.add_field(name="!extrato [página]", value="Mostra um histórico detalhado das suas últimas 10 transações (compras, ganhos, transferências).", inline=False)
+        
+        embed = discord.Embed(title="💰 Saldo e Extrato", color=0x2ecc71, description="Utilize este canal para consultar as suas finanças.")
+        embed.add_field(name="!saldo [@membro]", value="Verifica o seu saldo ou o de outro membro.", inline=False)
+        embed.add_field(name="!extrato [página]", value="Mostra o seu histórico de transações.", inline=False)
         await create_and_pin(cat_bank, "💰｜saldo-e-extrato", embed)
 
-        embed = discord.Embed(title="🛍️ Loja da Guilda", color=0x3498db, description="Aqui pode gastar as suas GuildCoins em itens valiosos!")
-        embed.add_field(name="!loja", value="Lista todos os itens disponíveis para compra, com os seus IDs, preços e descrições.", inline=False)
-        embed.add_field(name="!comprar <ID_do_item>", value="Compra um item da loja. O valor será debitado do seu saldo.", inline=False)
+        embed = discord.Embed(title="🛍️ Loja da Guilda", color=0x3498db, description="Gaste as suas GuildCoins aqui!")
+        embed.add_field(name="!loja", value="Lista todos os itens disponíveis.", inline=False)
+        embed.add_field(name="!comprar <ID_do_item>", value="Compra um item da loja.", inline=False)
         await create_and_pin(cat_bank, "🛍️｜loja-da-guilda", embed)
 
-        embed = discord.Embed(title="🏆 Eventos e Missões", color=0xe91e63, description="A principal fonte de renda da guilda! Participe nos conteúdos para ser recompensado.")
-        embed.add_field(name="!listareventos", value="Mostra todos os eventos que estão a decorrer, com as suas recompensas e metas.", inline=False)
-        embed.add_field(name="!participar <ID_do_evento>", value="Inscreve-se num evento ativo para começar a registar o seu progresso.", inline=False)
+        embed = discord.Embed(title="🏆 Eventos e Missões", color=0xe91e63, description="A principal fonte de renda da guilda!")
+        embed.add_field(name="!listareventos", value="Mostra os eventos a decorrer.", inline=False)
+        embed.add_field(name="!participar <ID_do_evento>", value="Inscreve-se num evento.", inline=False)
         await create_and_pin(cat_bank, "🏆｜eventos-e-missões", embed)
 
-        embed = discord.Embed(title="🔮 Submeter Orbes", color=0x9b59b6, description="Ganhe recompensas por capturar orbes no jogo.")
-        embed.add_field(name="Como funciona?", value="Use o comando abaixo e **anexe o print (screenshot)** da captura na mesma mensagem.", inline=False)
-        embed.add_field(name="Comando", value="`!orbe <cor> <@membro1> <@membro2>...`\n**Cores válidas:** verde, azul, roxa, dourada.", inline=False)
-        embed.set_footer(text="A sua submissão será enviada para aprovação da administração.")
+        embed = discord.Embed(title="🔮 Submeter Orbes", color=0x9b59b6, description="Ganhe recompensas por capturar orbes.")
+        embed.add_field(name="Comando", value="`!orbe <cor> <@membros...>` e anexe o print.", inline=False)
         await create_and_pin(cat_bank, "🔮｜submeter-orbes", embed, set_config_key='canal_orbes')
-
-        # CATEGORIA: TAXA SEMANAL
+        
         cat_taxas = await guild.create_category("💸 TAXA SEMANAL")
         await prog_msg.edit(content="🔥 **A iniciar reconstrução total...** (3/5)")
-
-        embed = discord.Embed(title="ℹ️ Como Funciona a Taxa Semanal", color=0x7f8c8d, description="Um sistema para garantir a manutenção e o crescimento da nossa guilda.")
-        embed.add_field(name="O que é?", value="É uma pequena contribuição semanal, debitada automaticamente do seu saldo em GuildCoins, que ajuda a financiar as atividades e os recursos da guilda.", inline=False)
-        embed.add_field(name="O que acontece se eu não tiver saldo?", value="O seu cargo será alterado para `@Inadimplente`, restringindo o seu acesso a alguns canais. Para voltar ao normal, basta regularizar o pagamento no canal `🪙｜pagamento-de-taxas`.", inline=False)
+        
+        embed = discord.Embed(title="ℹ️ Como Funciona a Taxa Semanal", color=0x7f8c8d, description="Um sistema para a manutenção da guilda.")
+        embed.add_field(name="O que é?", value="É uma contribuição semanal debitada do seu saldo em GuildCoins.", inline=False)
+        embed.add_field(name="E se eu não pagar?", value="O seu cargo será alterado para `@Inadimplente`.", inline=False)
         await create_and_pin(cat_taxas, "ℹ️｜como-funciona-a-taxa", embed, {guild.default_role: discord.PermissionOverwrite(send_messages=False)})
 
-        embed = discord.Embed(title="🪙 Pagamento de Taxas", color=0x95a5a6, description="Utilize este canal para regularizar a sua situação caso o seu cargo seja alterado para `@Inadimplente`.")
-        embed.add_field(name="Pagar com GuildCoins (Automático)", value="Use `!pagar-taxa`\nO sistema irá debitar o valor do seu saldo e restaurar o seu cargo de membro instantaneamente.", inline=False)
-        embed.add_field(name="Pagar com Prata (Manual)", value="Use `!paguei-prata` e anexe um print do comprovativo de envio da prata no jogo. Um administrador irá aprovar e restaurar o seu acesso.", inline=False)
+        embed = discord.Embed(title="🪙 Pagamento de Taxas", color=0x95a5a6, description="Utilize este canal para regularizar a sua situação.")
+        embed.add_field(name="Pagar com GuildCoins", value="Use `!pagar-taxa`.", inline=False)
+        embed.add_field(name="Pagar com Prata", value="Use `!paguei-prata` e anexe um print.", inline=False)
         await create_and_pin(cat_taxas, "🪙｜pagamento-de-taxas", embed)
         
-        # CATEGORIA: ADMINISTRAÇÃO
         cat_admin = await guild.create_category("⚙️ ADMINISTRAÇÃO", overwrites=admin_overwrites)
         await prog_msg.edit(content="🔥 **A iniciar reconstrução total...** (4/5)")
-
-        embed = discord.Embed(title="✅ Aprovações", color=0xf1c40f, description="Este canal é usado pela staff para aprovar ou recusar submissões pendentes, como pagamentos de taxa em prata e capturas de orbes.")
+        
+        embed = discord.Embed(title="✅ Aprovações", color=0xf1c40f, description="Canal para a staff aprovar submissões.")
         await create_and_pin(cat_admin, "✅｜aprovações", embed, set_config_key='canal_aprovacao')
 
-        embed = discord.Embed(title="🚨 Resgates Staff", color=0xc27c0e, description="Canal exclusivo para a staff processar a conversão de GuildCoins de membros para Prata do jogo.")
+        embed = discord.Embed(title="🚨 Resgates Staff", color=0xc27c0e, description="Canal para a staff processar resgates de moedas.")
         embed.add_field(name="Comando", value="`!resgatar <@membro> <valor>`", inline=False)
         await create_and_pin(cat_admin, "🚨｜resgates-staff", embed)
 
-        embed = discord.Embed(title="🔩 Comandos Admin", color=0xe67e22, description="Utilize este canal para todos os comandos de gestão e configuração para não poluir os outros canais.")
+        embed = discord.Embed(title="🔩 Comandos Admin", color=0xe67e22, description="Utilize este canal para comandos de gestão.")
         await create_and_pin(cat_admin, "🔩｜comandos-admin", embed)
-
+        
         await prog_msg.edit(content="✅ **Estrutura final criada e configurada com sucesso!** (5/5)")
 
 async def setup(bot):
