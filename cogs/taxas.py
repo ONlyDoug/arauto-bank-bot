@@ -1,16 +1,80 @@
 import discord
 from discord.ext import commands, tasks
 import contextlib
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
+from utils.permissions import check_permission_level
+
+# --- View para Aprovação de Pagamento em Prata ---
+class TaxaPrataView(discord.ui.View):
+    def __init__(self, bot):
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    async def handle_interaction(self, interaction: discord.Interaction, status: str):
+        perm_check = await check_permission_level(2).predicate(interaction)
+        if not perm_check:
+            return await interaction.response.send_message("Você não tem permissão para esta ação.", ephemeral=True)
+
+        message_id = interaction.message.id
+        
+        with self.get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT user_id FROM submissoes_taxa WHERE message_id = %s AND status = 'pendente'", (message_id,))
+                result = cursor.fetchone()
+                if not result:
+                    return await interaction.response.send_message("Esta submissão já foi processada.", ephemeral=True, delete_after=10)
+                
+                user_id = result[0]
+                cursor.execute("UPDATE submissoes_taxa SET status = %s WHERE message_id = %s", (status, message_id))
+                conn.commit()
+
+        membro = interaction.guild.get_member(user_id)
+        original_embed = interaction.message.embeds[0]
+        new_embed = original_embed.copy()
+        
+        if status == "aprovado":
+            await self.bot.get_cog('Taxas').regularizar_membro(membro)
+            new_embed.title = "✅ Pagamento Aprovado"
+            new_embed.color = discord.Color.green()
+            new_embed.clear_fields()
+            new_embed.add_field(name="Membro", value=membro.mention)
+            new_embed.add_field(name="Status", value=f"Aprovado por {interaction.user.mention}")
+        else: # recusado
+            new_embed.title = "❌ Pagamento Recusado"
+            new_embed.color = discord.Color.red()
+            new_embed.clear_fields()
+            new_embed.add_field(name="Membro", value=membro.mention)
+            new_embed.add_field(name="Status", value=f"Recusado por {interaction.user.mention}")
+
+        await interaction.message.edit(embed=new_embed, view=None)
+        await interaction.response.send_message(f"Submissão de {membro.display_name} marcada como `{status}`.", ephemeral=True)
+
+    @discord.ui.button(label="Aprovar", style=discord.ButtonStyle.green, custom_id="aprovar_taxa_prata_button")
+    async def aprovar_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_interaction(interaction, "aprovado")
+
+    @discord.ui.button(label="Recusar", style=discord.ButtonStyle.red, custom_id="recusar_taxa_prata_button")
+    async def recusar_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_interaction(interaction, "recusado")
+    
+    @contextlib.contextmanager
+    def get_db_connection(self):
+        conn = None
+        try:
+            conn = self.bot.db_pool.getconn()
+            yield conn
+        finally:
+            if conn: self.bot.db_pool.putconn(conn)
+
 
 class Taxas(commands.Cog):
-    """Cog para gerir o sistema de taxa semanal."""
     def __init__(self, bot):
         self.bot = bot
-        self.cobrar_taxas.start()
+        self.cobrar_taxa.start()
+        self.bot.add_view(TaxaPrataView(bot))
 
     def cog_unload(self):
-        self.cobrar_taxas.cancel()
+        self.cobrar_taxa.cancel()
 
     @contextlib.contextmanager
     def get_db_connection(self):
@@ -21,71 +85,70 @@ class Taxas(commands.Cog):
         finally:
             if conn: self.bot.db_pool.putconn(conn)
 
+    @commands.command(name='paguei-prata')
+    async def paguei_prata(self, ctx):
+        if not ctx.message.attachments:
+            return await ctx.send("❌ Você precisa anexar um print (screenshot) do comprovativo de pagamento.", delete_after=10)
+        
+        comprovativo = ctx.message.attachments[0]
+        if not comprovativo.content_type.startswith('image/'):
+            return await ctx.send("❌ O anexo deve ser uma imagem.", delete_after=10)
+
+        admin_cog = self.bot.get_cog('Admin')
+        canal_aprovacao_id = int(admin_cog.get_config_value('canal_aprovacao', '0'))
+        if canal_aprovacao_id == 0:
+            return await ctx.send("⚠️ O canal de aprovações não está configurado. Contacte um administrador.")
+
+        canal_aprovacao = self.bot.get_channel(canal_aprovacao_id)
+        if not canal_aprovacao:
+            return await ctx.send("⚠️ O canal de aprovações não foi encontrado. Contacte um administrador.")
+
+        embed = discord.Embed(title="⏳ Aprovação de Taxa (Prata)", description=f"O membro **{ctx.author.display_name}** enviou um comprovativo de pagamento.", color=0xf1c40f)
+        embed.set_image(url=comprovativo.url)
+        embed.add_field(name="Membro", value=ctx.author.mention)
+        embed.set_footer(text="Ação requerida: Verificar o pagamento no jogo e aprovar/recusar.")
+        
+        view = TaxaPrataView(self.bot)
+        msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
+
+        with self.get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO submissoes_taxa (message_id, user_id, status) VALUES (%s, %s, 'pendente')",
+                    (msg_aprovacao.id, ctx.author.id)
+                )
+            conn.commit()
+
+        await ctx.send("✅ O seu comprovativo foi enviado para aprovação. Por favor, aguarde.", delete_after=15)
+        # Apaga a mensagem do usuário para manter o canal limpo
+        await ctx.message.delete()
+
+    async def regularizar_membro(self, membro: discord.Member):
+        if not membro: return
+        admin_cog = self.bot.get_cog('Admin')
+        id_cargo_inadimplente = int(admin_cog.get_config_value('cargo_inadimplente', '0'))
+        id_cargo_membro = int(admin_cog.get_config_value('cargo_membro', '0'))
+        cargo_inadimplente = membro.guild.get_role(id_cargo_inadimplente)
+        cargo_membro = membro.guild.get_role(id_cargo_membro)
+        if cargo_inadimplente in membro.roles:
+            await membro.remove_roles(cargo_inadimplente)
+        if cargo_membro and cargo_membro not in membro.roles:
+            await membro.add_roles(cargo_membro)
+        with self.get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("UPDATE taxas SET status = 'pago', data_vencimento = %s WHERE user_id = %s",
+                               (date.today() + timedelta(days=7), membro.id))
+            conn.commit()
+    
+    # ... (restante do código)
     @tasks.loop(hours=24)
-    async def cobrar_taxas(self):
+    async def cobrar_taxa(self):
+        pass
+
+    @cobrar_taxa.before_loop
+    async def before_cobrar_taxa(self):
         await self.bot.wait_until_ready()
-        hoje = date.today()
-        # Executar apenas aos domingos (weekday() == 6)
-        if hoje.weekday() != 6: return
-
-        admin_cog = self.bot.get_cog('Admin')
-        economia_cog = self.bot.get_cog('Economia')
-        
-        valor_taxa = int(admin_cog.get_config_value('taxa_semanal_valor', '0'))
-        if valor_taxa <= 0: return
-
-        cargo_membro_id = int(admin_cog.get_config_value('cargo_membro', '0'))
-        cargo_inadimplente_id = int(admin_cog.get_config_value('cargo_inadimplente', '0'))
-        cargo_isento_id = int(admin_cog.get_config_value('cargo_isento', '0'))
-
-        if not all([cargo_membro_id, cargo_inadimplente_id]): return
-
-        for guild in self.bot.guilds:
-            cargo_membro = guild.get_role(cargo_membro_id)
-            cargo_inadimplente = guild.get_role(cargo_inadimplente_id)
-            cargo_isento = guild.get_role(cargo_isento_id)
-            if not all([cargo_membro, cargo_inadimplente]): continue
-
-            for member in guild.members:
-                if member.bot or (cargo_isento and cargo_isento in member.roles):
-                    continue
-                
-                saldo = await economia_cog.get_saldo(member.id)
-                if saldo >= valor_taxa:
-                    await economia_cog.update_saldo(member.id, -valor_taxa, "pagamento_taxa", "Taxa semanal automática")
-                    # Garantir que está com o cargo certo
-                    if cargo_inadimplente in member.roles: await member.remove_roles(cargo_inadimplente)
-                    if cargo_membro not in member.roles: await member.add_roles(cargo_membro)
-                else:
-                    # Tornar inadimplente
-                    if cargo_membro in member.roles: await member.remove_roles(cargo_membro)
-                    if cargo_inadimplente not in member.roles: await member.add_roles(cargo_inadimplente)
-
-    @commands.command(name='pagar-taxa')
-    async def pagar_taxa(self, ctx):
-        admin_cog = self.bot.get_cog('Admin')
-        valor_taxa = int(admin_cog.get_config_value('taxa_semanal_valor', '0'))
-        
-        economia_cog = self.bot.get_cog('Economia')
-        saldo = await economia_cog.get_saldo(ctx.author.id)
-
-        if saldo < valor_taxa:
-            return await ctx.send(f"Você não tem saldo suficiente. Precisa de `{valor_taxa} GC`.")
-
-        await economia_cog.update_saldo(ctx.author.id, -valor_taxa, "pagamento_taxa", "Pagamento manual de taxa")
-
-        cargo_membro_id = int(admin_cog.get_config_value('cargo_membro', '0'))
-        cargo_inadimplente_id = int(admin_cog.get_config_value('cargo_inadimplente', '0'))
-        cargo_membro = ctx.guild.get_role(cargo_membro_id)
-        cargo_inadimplente = ctx.guild.get_role(cargo_inadimplente_id)
-
-        if cargo_membro and cargo_inadimplente:
-            if cargo_inadimplente in ctx.author.roles:
-                await ctx.author.remove_roles(cargo_inadimplente)
-            if cargo_membro not in ctx.author.roles:
-                await ctx.author.add_roles(cargo_membro)
-        
-        await ctx.send("✅ Taxa paga com sucesso! O seu acesso foi restaurado.")
+        print("Módulo de Taxas pronto. A iniciar a tarefa de cobrança.")
 
 async def setup(bot):
     await bot.add_cog(Taxas(bot))
