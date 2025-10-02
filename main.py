@@ -11,7 +11,6 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 # Lista de Cogs a serem carregados
-# O admin deve ser carregado à parte primeiro no setup_hook
 COGS_A_CARREGAR = [
     'cogs.economia',
     'cogs.eventos',
@@ -28,10 +27,8 @@ class ArautoBankBot(commands.Bot):
         self.db_pool = None
 
     async def setup_hook(self):
-        """Gancho assíncrono que é executado antes do bot fazer login."""
         print("A executar o setup_hook...")
         
-        # 1. Inicializar o pool de conexões com a base de dados
         try:
             self.db_pool = psycopg2.pool.SimpleConnectionPool(1, 20, dsn=DATABASE_URL)
             if self.db_pool:
@@ -41,7 +38,6 @@ class ArautoBankBot(commands.Bot):
             await self.close()
             return
 
-        # 2. Carregar o Cog de Admin primeiro
         try:
             await self.load_extension('cogs.admin')
             print("Cog 'cogs.admin' carregado com sucesso.")
@@ -50,7 +46,6 @@ class ArautoBankBot(commands.Bot):
             await self.close()
             return
             
-        # 3. Inicializar o esquema da base de dados automaticamente
         admin_cog = self.get_cog('Admin')
         if admin_cog:
             print("A inicializar o esquema da base de dados...")
@@ -60,7 +55,6 @@ class ArautoBankBot(commands.Bot):
             await self.close()
             return
 
-        # 4. Carregar os restantes Cogs
         for cog in COGS_A_CARREGAR:
             try:
                 await self.load_extension(cog)
@@ -73,7 +67,6 @@ class ArautoBankBot(commands.Bot):
         print('------')
 
     async def close(self):
-        """Fecha as conexões antes de desligar o bot."""
         if self.db_pool:
             self.db_pool.closeall()
             print("Pool de conexões com a base de dados fechado.")
@@ -84,7 +77,6 @@ def main():
         print("ERRO CRÍTICO: As variáveis de ambiente DISCORD_TOKEN e DATABASE_URL são obrigatórias.")
         return
 
-    # Define as intenções do bot
     intents = discord.Intents.default()
     intents.guilds = True
     intents.members = True
@@ -93,10 +85,7 @@ def main():
     intents.reactions = True
     intents.voice_states = True
 
-    # Cria a instância do bot
     bot = ArautoBankBot(command_prefix='!', intents=intents, case_insensitive=True)
-    
-    # Inicia o bot
     bot.run(TOKEN)
 
 if __name__ == '__main__':

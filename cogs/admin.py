@@ -3,24 +3,20 @@ from discord.ext import commands
 import asyncio
 import contextlib
 
-# Constante para o ID do tesouro, para evitar "números mágicos"
 ID_TESOURO_GUILDA = 1
 
 class Admin(commands.Cog):
-    """Cog que agrupa todos os comandos de administração e configuração do bot."""
     def __init__(self, bot):
         self.bot = bot
 
     @contextlib.contextmanager
     def get_db_connection(self):
-        """Obtém uma conexão do pool e garante que ela é devolvida."""
         conn = None
         try:
             conn = self.bot.db_pool.getconn()
             yield conn
         finally:
-            if conn:
-                self.bot.db_pool.putconn(conn)
+            if conn: self.bot.db_pool.putconn(conn)
 
     def get_config_value(self, chave: str, default: str = None):
         with self.get_db_connection() as conn:
@@ -36,7 +32,6 @@ class Admin(commands.Cog):
             conn.commit()
 
     async def initialize_database_schema(self):
-        """Garante que todas as tabelas e configurações padrão existam na base de dados."""
         try:
             with self.get_db_connection() as conn:
                 with conn.cursor() as cursor:
@@ -58,11 +53,13 @@ class Admin(commands.Cog):
                     cursor.execute("""CREATE TABLE IF NOT EXISTS reacoes_recompensadas (message_id BIGINT, user_id BIGINT, 
                         PRIMARY KEY (message_id, user_id))""")
 
+                    # Valores padrão ajustados conforme especificação
                     default_configs = {
-                        'lastro_prata': '1000', 'taxa_semanal_valor': '500', 'cargo_membro': '0',
-                        'cargo_inadimplente': '0', 'cargo_isento': '0', 'perm_nivel_1': '0', 'perm_nivel_2': '0',
+                        'lastro_total_prata': '100000000', 'taxa_conversao_prata': '1000',
+                        'taxa_semanal_valor': '500', 'cargo_membro': '0', 'cargo_inadimplente': '0',
+                        'cargo_isento': '0', 'perm_nivel_1': '0', 'perm_nivel_2': '0',
                         'perm_nivel_3': '0', 'perm_nivel_4': '0', 'canal_aprovacao': '0', 'canal_orbes': '0',
-                        'canal_anuncios': '0', 'recompensa_voz': '2', 'limite_voz': '120', 'recompensa_chat': '1',
+                        'canal_anuncios': '0', 'recompensa_voz': '1', 'limite_voz': '120', 'recompensa_chat': '1',
                         'limite_chat': '100', 'recompensa_reacao': '50', 'orbe_verde': '100', 'orbe_azul': '250',
                         'orbe_roxa': '500', 'orbe_dourada': '1000'
                     }
@@ -101,7 +98,7 @@ class Admin(commands.Cog):
         for cat_name in ["🏦 ARAUTO BANK", "💸 TAXA SEMANAL", "⚙️ ADMINISTRAÇÃO"]:
             if category := discord.utils.get(guild.categories, name=cat_name):
                 for channel in category.channels: await channel.delete()
-                await asyncio.sleep(1)
+                await asyncio.sleep(2) # Aumento do delay para evitar rate limit
                 await category.delete()
         await prog_msg.edit(content="🔥 **A iniciar reconstrução total...** (1/5)")
 
@@ -115,7 +112,7 @@ class Admin(commands.Cog):
 
         async def create_and_pin(category, name, embed, overwrites=None, set_config_key=None):
             channel = await category.create_text_channel(name, overwrites=overwrites)
-            await asyncio.sleep(1)
+            await asyncio.sleep(2) # Aumento do delay para evitar rate limit
             msg = await channel.send(embed=embed)
             await msg.pin()
             if set_config_key: self.set_config_value(set_config_key, str(channel.id))
@@ -125,45 +122,30 @@ class Admin(commands.Cog):
         await prog_msg.edit(content="🔥 **A iniciar reconstrução total...** (2/5)")
 
         embed = discord.Embed(title="🎓 Bem-vindo ao Arauto Bank!", color=0xffd700, description="O sistema económico da nossa guilda, baseado no princípio de **Prova de Participação**.")
-        embed.add_field(name="Como funciona?", value="Tudo o que você faz para ajudar a guilda gera **GuildCoins (GC)**, a nossa moeda interna.", inline=False)
-        embed.add_field(name="Comandos Essenciais", value="`!saldo`, `!extrato`, `!loja`, `!info-moeda`", inline=False)
         await create_and_pin(cat_bank, "🎓｜como-usar-o-bot", embed, {guild.default_role: discord.PermissionOverwrite(send_messages=False)})
         
         embed = discord.Embed(title="📈 Mercado Financeiro", color=0x1abc9c, description="A nossa economia é **lastreada em Prata**.")
-        embed.add_field(name="O que é o Lastro?", value="Significa que a nossa moeda tem valor real e não pode ser criada infinitamente.", inline=False)
-        embed.add_field(name="Comando Útil", value="Use `!info-moeda` ou `!lastro` para ver o estado atual da economia.", inline=False)
         await create_and_pin(cat_bank, "📈｜mercado-financeiro", embed)
         
         embed = discord.Embed(title="💰 Saldo e Extrato", color=0x2ecc71, description="Utilize este canal para consultar as suas finanças.")
-        embed.add_field(name="!saldo [@membro]", value="Verifica o seu saldo ou o de outro membro.", inline=False)
-        embed.add_field(name="!extrato [página]", value="Mostra o seu histórico de transações.", inline=False)
         await create_and_pin(cat_bank, "💰｜saldo-e-extrato", embed)
 
         embed = discord.Embed(title="🛍️ Loja da Guilda", color=0x3498db, description="Gaste as suas GuildCoins aqui!")
-        embed.add_field(name="!loja", value="Lista todos os itens disponíveis.", inline=False)
-        embed.add_field(name="!comprar <ID_do_item>", value="Compra um item da loja.", inline=False)
         await create_and_pin(cat_bank, "🛍️｜loja-da-guilda", embed)
 
         embed = discord.Embed(title="🏆 Eventos e Missões", color=0xe91e63, description="A principal fonte de renda da guilda!")
-        embed.add_field(name="!listareventos", value="Mostra os eventos a decorrer.", inline=False)
-        embed.add_field(name="!participar <ID_do_evento>", value="Inscreve-se num evento.", inline=False)
         await create_and_pin(cat_bank, "🏆｜eventos-e-missões", embed)
 
         embed = discord.Embed(title="🔮 Submeter Orbes", color=0x9b59b6, description="Ganhe recompensas por capturar orbes.")
-        embed.add_field(name="Comando", value="`!orbe <cor> <@membros...>` e anexe o print.", inline=False)
         await create_and_pin(cat_bank, "🔮｜submeter-orbes", embed, set_config_key='canal_orbes')
         
         cat_taxas = await guild.create_category("💸 TAXA SEMANAL")
         await prog_msg.edit(content="🔥 **A iniciar reconstrução total...** (3/5)")
         
         embed = discord.Embed(title="ℹ️ Como Funciona a Taxa Semanal", color=0x7f8c8d, description="Um sistema para a manutenção da guilda.")
-        embed.add_field(name="O que é?", value="É uma contribuição semanal debitada do seu saldo em GuildCoins.", inline=False)
-        embed.add_field(name="E se eu não pagar?", value="O seu cargo será alterado para `@Inadimplente`.", inline=False)
         await create_and_pin(cat_taxas, "ℹ️｜como-funciona-a-taxa", embed, {guild.default_role: discord.PermissionOverwrite(send_messages=False)})
 
         embed = discord.Embed(title="🪙 Pagamento de Taxas", color=0x95a5a6, description="Utilize este canal para regularizar a sua situação.")
-        embed.add_field(name="Pagar com GuildCoins", value="Use `!pagar-taxa`.", inline=False)
-        embed.add_field(name="Pagar com Prata", value="Use `!paguei-prata` e anexe um print.", inline=False)
         await create_and_pin(cat_taxas, "🪙｜pagamento-de-taxas", embed)
         
         cat_admin = await guild.create_category("⚙️ ADMINISTRAÇÃO", overwrites=admin_overwrites)
@@ -173,7 +155,6 @@ class Admin(commands.Cog):
         await create_and_pin(cat_admin, "✅｜aprovações", embed, set_config_key='canal_aprovacao')
 
         embed = discord.Embed(title="🚨 Resgates Staff", color=0xc27c0e, description="Canal para a staff processar resgates de moedas.")
-        embed.add_field(name="Comando", value="`!resgatar <@membro> <valor>`", inline=False)
         await create_and_pin(cat_admin, "🚨｜resgates-staff", embed)
 
         embed = discord.Embed(title="🔩 Comandos Admin", color=0xe67e22, description="Utilize este canal para comandos de gestão.")

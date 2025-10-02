@@ -1,12 +1,13 @@
 import discord
 from discord.ext import commands, tasks
 import contextlib
-from datetime import date, datetime, timedelta
+from datetime import date
+import asyncio
 
 class Engajamento(commands.Cog):
-    """Cog para gerir as fontes de renda passiva e de engajamento."""
     def __init__(self, bot):
         self.bot = bot
+        self._cache = {} # Cache local para cooldowns
         self.recompensar_voz.start()
 
     def cog_unload(self):
@@ -70,7 +71,7 @@ class Engajamento(commands.Cog):
         user_id = message.author.id
         cache_key = f"chat_cooldown:{user_id}"
         
-        if self.bot.get_cog('Admin')._cache.get(cache_key): return
+        if self._cache.get(cache_key): return
             
         admin_cog = self.bot.get_cog('Admin')
         economia_cog = self.bot.get_cog('Economia')
@@ -84,13 +85,13 @@ class Engajamento(commands.Cog):
             await economia_cog.update_saldo(user_id, recompensa_chat, "renda_passiva_chat", "Atividade no chat")
             await self.update_atividade_diaria(user_id, moedas_chat=recompensa_chat)
             
-            self.bot.get_cog('Admin')._cache[cache_key] = True
+            self._cache[cache_key] = True
             await asyncio.sleep(60)
-            self.bot.get_cog('Admin')._cache.pop(cache_key, None)
+            self._cache.pop(cache_key, None)
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload):
-        if payload.member.bot: return
+        if not payload.member or payload.member.bot: return
 
         admin_cog = self.bot.get_cog('Admin')
         canal_anuncios_id = int(admin_cog.get_config_value('canal_anuncios', '0'))
@@ -111,9 +112,5 @@ class Engajamento(commands.Cog):
         await economia_cog.update_saldo(payload.user_id, recompensa_reacao, "recompensa_reacao", "Leitura de anúncio")
 
 async def setup(bot):
-    # Adiciona um cache simples ao Admin cog se não existir
-    admin_cog = bot.get_cog('Admin')
-    if admin_cog and not hasattr(admin_cog, '_cache'):
-        admin_cog._cache = {}
     await bot.add_cog(Engajamento(bot))
 

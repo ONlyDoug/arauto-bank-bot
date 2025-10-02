@@ -3,11 +3,9 @@ from discord.ext import commands
 import contextlib
 from utils.permissions import check_permission_level
 
-# Constante para o ID do tesouro
 ID_TESOURO_GUILDA = 1
 
 class Economia(commands.Cog):
-    """Cog para gerir a economia base do bot, como saldos e transferências."""
     def __init__(self, bot):
         self.bot = bot
 
@@ -38,14 +36,23 @@ class Economia(commands.Cog):
 
     @commands.command(name='saldo')
     async def saldo(self, ctx, membro: discord.Member = None):
-        """Mostra o seu saldo ou o de outro membro."""
+        """Mostra o seu saldo ou o de outro membro com uma estética melhorada."""
         target_user = membro or ctx.author
         saldo_user = await self.get_saldo(target_user.id)
-        await ctx.send(f"💰 O saldo de {target_user.mention} é de `{saldo_user:,} GuildCoins`.".replace(',', '.'))
+        
+        embed = discord.Embed(
+            color=0xFFD700  # Cor dourada
+        )
+        # Título com o cargo mais alto (se houver) e o nome
+        cargo_principal = target_user.top_role.name if target_user.top_role.name != "@everyone" else "Membro"
+        embed.set_author(name=f"Saldo de [{cargo_principal}] {target_user.display_name}", icon_url=target_user.display_avatar.url)
+        embed.description = f"Você possui 🪙 **{saldo_user:,}** moedas.".replace(',', '.')
+
+        await ctx.send(embed=embed)
+
 
     @commands.command(name='transferir')
     async def transferir(self, ctx, membro: discord.Member, valor: int):
-        """Transfere uma quantidade de moedas para outro membro."""
         if membro.bot or membro == ctx.author:
             return await ctx.send("Transferência inválida.")
         if valor <= 0:
@@ -63,7 +70,6 @@ class Economia(commands.Cog):
     @commands.command(name='emitir')
     @check_permission_level(3)
     async def emitir(self, ctx, membro: discord.Member, valor: int):
-        """(Nível 3+) Emite moedas do tesouro da guilda para um membro."""
         if valor <= 0:
             return await ctx.send("O valor deve ser positivo.")
         

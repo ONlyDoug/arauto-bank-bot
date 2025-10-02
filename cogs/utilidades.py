@@ -6,9 +6,6 @@ from utils.permissions import check_permission_level
 ID_TESOURO_GUILDA = 1
 
 class Utilidades(commands.Cog):
-    """
-    Cog para comandos de utilidade geral e gestão económica de alto nível.
-    """
     def __init__(self, bot):
         self.bot = bot
 
@@ -29,29 +26,35 @@ class Utilidades(commands.Cog):
 
     @commands.command(name='extrato')
     async def extrato(self, ctx, page: int = 1):
-        """Mostra as suas últimas 10 transações."""
+        """Mostra as suas transações mais relevantes."""
         if page < 1: page = 1
         offset = (page - 1) * 10
+
+        # Tipos de transação a serem omitidos do extrato do membro
+        tipos_irrelevantes = (
+            'renda_passiva_voz', 'renda_passiva_chat', 'recompensa_reacao',
+            'saida_airdrop', 'entrada_resgate'
+        )
 
         with self.get_db_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s ORDER BY data DESC LIMIT 10 OFFSET %s",
-                    (ctx.author.id, offset)
+                    "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND tipo NOT IN %s ORDER BY data DESC LIMIT 10 OFFSET %s",
+                    (ctx.author.id, tipos_irrelevantes, offset)
                 )
                 transacoes = cursor.fetchall()
                 
-                cursor.execute("SELECT COUNT(id) FROM transacoes WHERE user_id = %s", (ctx.author.id,))
+                cursor.execute("SELECT COUNT(id) FROM transacoes WHERE user_id = %s AND tipo NOT IN %s", (ctx.author.id, tipos_irrelevantes))
                 total_transacoes = cursor.fetchone()[0]
 
         if not transacoes:
-            return await ctx.send("Você não tem nenhuma transação registada.")
+            return await ctx.send("Você não tem nenhuma transação relevante para exibir.")
 
         total_pages = (total_transacoes + 9) // 10
         
         embed = discord.Embed(
             title=f"📜 Extrato de {ctx.author.display_name}",
-            description=f"Página {page}/{total_pages}",
+            description=f"A exibir apenas transações relevantes. Página {page}/{total_pages}",
             color=discord.Color.blue()
         )
 
@@ -65,81 +68,45 @@ class Utilidades(commands.Cog):
                 inline=False
             )
         
-        embed.set_footer(text=f"Use !extrato <página> para ver mais.")
+        embed.set_footer(text=f"Use !extrato <página> para ver mais. Ganhos passivos não são exibidos.")
         await ctx.send(embed=embed)
 
     @commands.command(name='info-moeda', aliases=['infomoeda', 'lastro'])
     async def info_moeda(self, ctx):
-        """Mostra as estatísticas vitais da economia da guilda."""
+        """Mostra as estatísticas vitais da economia da guilda com o novo sistema de lastro."""
         admin_cog = self.bot.get_cog('Admin')
-        lastro_prata = int(admin_cog.get_config_value('lastro_prata', '1000'))
+        lastro_total_prata = int(admin_cog.get_config_value('lastro_total_prata', '0'))
+        taxa_conversao = int(admin_cog.get_config_value('taxa_conversao_prata', '1000'))
+        
+        suprimento_maximo = lastro_total_prata // taxa_conversao if taxa_conversao > 0 else 0
 
         with self.get_db_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT SUM(saldo) FROM banco WHERE user_id != %s", (ID_TESOURO_GUILDA,))
-                total_moedas_circulacao = cursor.fetchone()[0] or 0
-        
-        taxa_conversao = total_moedas_circulacao / lastro_prata if lastro_prata > 0 else 0
+                cursor.execute("SELECT saldo FROM banco WHERE user_id = %s", (ID_TESOURO_GUILDA,))
+                moedas_tesouro = (cursor.fetchone() or [0])[0]
 
-        embed = discord.Embed(title="📈 Informação da Moeda - Arauto Bank", color=0x1abc9c)
-        embed.add_field(name="🥈 Lastro Total em Prata", value=f"`{lastro_prata:,}`".replace(',', '.'), inline=True)
-        embed.add_field(name="💰 GC em Circulação", value=f"`{total_moedas_circulacao:,}`".replace(',', '.'), inline=True)
-        embed.add_field(name="💱 Taxa de Conversão", value=f"`1 GC ≈ {taxa_conversao:,.2f} Prata`".replace(',', '.'), inline=False)
+                cursor.execute("SELECT SUM(saldo) FROM banco WHERE user_id != %s", (ID_TESOURO_GUILDA,))
+                moedas_em_circulacao = (cursor.fetchone() or [0])[0]
+        
+        embed = discord.Embed(title="📈 Estatísticas do Arauto Bank", color=0x1abc9c)
+        embed.add_field(name="<:silver:12345> Lastro Total de Prata", value=f"**{lastro_total_prata:,}**".replace(',', '.'), inline=False)
+        embed.add_field(name="<:coin:12345> Taxa de Conversão", value=f"`1 🪙 = {taxa_conversao:,} 🥈`".replace(',', '.'), inline=False)
+        embed.add_field(name="<:chest:12345> Suprimento Máximo de Moedas", value=f"{suprimento_maximo:,}".replace(',', '.'), inline=True)
+        embed.add_field(name="<:treasure:12345> Moedas no Tesouro", value=f"{moedas_tesouro:,}".replace(',', '.'), inline=True)
+        embed.add_field(name="<:users:12345> Moedas em Circulação", value=f"{moedas_em_circulacao:,}".replace(',', '.'), inline=True)
+        embed.set_footer(text="Use emojis personalizados para uma melhor estética.")
+        
         await ctx.send(embed=embed)
     
-    @commands.command(name='ajustar-lastro')
+    @commands.command(name='definir-lastro')
     @check_permission_level(4)
-    async def ajustar_lastro(self, ctx, novo_total_prata: int):
-        """(Nível 4+) Atualiza o total de prata que lastreia a moeda."""
-        if novo_total_prata < 0:
+    async def definir_lastro(self, ctx, total_prata: int):
+        """(Nível 4+) Define o total de prata que a guilda possui, que serve como base para a economia."""
+        if total_prata < 0:
             return await ctx.send("O valor do lastro não pode ser negativo.")
             
-        self.bot.get_cog('Admin').set_config_value('lastro_prata', str(novo_total_prata))
-        await ctx.send(f"✅ O lastro da moeda foi ajustado para `{novo_total_prata:,} Prata`.".replace(',', '.'))
-
-    @commands.command(name='resgatar')
-    @check_permission_level(3)
-    async def resgatar(self, ctx, membro: discord.Member, valor: int):
-        """(Nível 3+) Converte GC de um membro em prata."""
-        if valor <= 0:
-            return await ctx.send("O valor do resgate deve ser positivo.")
-
-        economia_cog = self.bot.get_cog('Economia')
-        saldo_membro = await economia_cog.get_saldo(membro.id)
-
-        if saldo_membro < valor:
-            return await ctx.send(f"O membro não tem saldo suficiente.")
-
-        await economia_cog.update_saldo(membro.id, -valor, "resgate_prata", f"Aprovado por {ctx.author.name}")
-        await economia_cog.update_saldo(ID_TESOURO_GUILDA, valor, "entrada_resgate", f"Resgate de {membro.name}")
-
-        await ctx.send(f"✅ Resgate de `{valor:,} GC` para {membro.mention} processado.".replace(',', '.'))
-
-    @commands.command(name='airdrop')
-    @check_permission_level(3)
-    async def airdrop(self, ctx, valor: int, cargo: discord.Role = None):
-        """(Nível 3+) Distribui GC do tesouro para membros."""
-        if valor <= 0:
-            return await ctx.send("O valor do airdrop deve ser positivo.")
-            
-        membros_alvo = cargo.members if cargo else [m for m in ctx.guild.members if not m.bot]
-        if not membros_alvo:
-            return await ctx.send("Nenhum membro encontrado.")
-
-        economia_cog = self.bot.get_cog('Economia')
-        saldo_tesouro = await economia_cog.get_saldo(ID_TESOURO_GUILDA)
-        custo_total = valor * len(membros_alvo)
-
-        if saldo_tesouro < custo_total:
-            return await ctx.send(f"O tesouro não tem saldo suficiente. Custo: `{custo_total:,} GC`.".replace(',', '.'))
-
-        msg = await ctx.send(f"A iniciar airdrop de `{valor} GC` para {len(membros_alvo)} membros...")
-
-        for membro in membros_alvo:
-            await economia_cog.update_saldo(membro.id, valor, "airdrop", f"Executado por {ctx.author.name}")
-            await economia_cog.update_saldo(ID_TESOURO_GUILDA, -valor, "saida_airdrop", f"Para {membro.name}")
-
-        await msg.edit(content=f"✅ Airdrop concluído! `{custo_total:,} GC` foram distribuídos.".replace(',', '.'))
+        self.bot.get_cog('Admin').set_config_value('lastro_total_prata', str(total_prata))
+        await ctx.send(f"✅ O lastro total de prata foi definido para **{total_prata:,}**.".replace(',', '.'))
 
 async def setup(bot):
     await bot.add_cog(Utilidades(bot))
