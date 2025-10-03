@@ -82,6 +82,7 @@ class ArautoBankBot(commands.Bot):
         for cog_name in cogs_to_load: 
             try:
                 await self.load_extension(cog_name)
+                print(f"Cog '{cog_name}' carregado com sucesso.")
             except Exception as e:
                 print(f"ERRO ao carregar o cog '{cog_name}': {e}")
         

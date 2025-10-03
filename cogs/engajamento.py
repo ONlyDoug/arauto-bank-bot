@@ -27,16 +27,14 @@ class Engajamento(commands.Cog):
                 )
             conn.commit()
 
-    async def get_total_renda_passiva(self, user_id, tipo):
+    async def get_total_renda_passiva_diaria(self, user_id, tipo):
         data_hoje = datetime.utcnow().date()
-        with self.bot.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT valor FROM renda_passiva_log WHERE user_id = %s AND tipo = %s AND data = %s",
-                    (user_id, tipo, data_hoje)
-                )
-                resultado = cursor.fetchone()
-                return resultado[0] if resultado else 0
+        total = self.bot.db_manager.execute_query(
+            "SELECT valor FROM renda_passiva_log WHERE user_id = %s AND tipo = %s AND data = %s",
+            (user_id, tipo, data_hoje),
+            fetch="one"
+        )
+        return total[0] if total else 0
 
     @tasks.loop(minutes=5)
     async def recompensar_voz(self):
@@ -55,8 +53,11 @@ class Engajamento(commands.Cog):
                         if member.bot or member.voice.self_deaf or member.voice.self_mute:
                             continue
 
-                        total_ganho_min = await self.get_total_renda_passiva(member.id, 'voz') * 5
-                        if total_ganho_min < limite_voz_minutos:
+                        # O log agora armazena o valor em moedas, não minutos
+                        total_ganho_hoje = await self.get_total_renda_passiva_diaria(member.id, 'voz')
+                        limite_diario_moedas = (limite_voz_minutos / 5) * recompensa_voz
+
+                        if total_ganho_hoje < limite_diario_moedas:
                             await economia_cog.depositar(member.id, recompensa_voz, "Renda passiva por atividade em voz")
                             await self.registrar_renda_passiva(member.id, 'voz', recompensa_voz)
         except Exception as e:
@@ -81,7 +82,7 @@ class Engajamento(commands.Cog):
         if recompensa_chat == 0 or limite_chat == 0:
             return
 
-        total_ganho_hoje = await self.get_total_renda_passiva(user_id, 'chat')
+        total_ganho_hoje = await self.get_total_renda_passiva_diaria(user_id, 'chat')
         if total_ganho_hoje >= limite_chat:
             return
 
@@ -106,17 +107,18 @@ class Engajamento(commands.Cog):
             return
         
         # Evitar dupla recompensa
-        with self.bot.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT 1 FROM transacoes WHERE user_id = %s AND descricao = %s",
-                    (payload.user_id, f"Recompensa por reagir ao anúncio {payload.message_id}")
-                )
-                if cursor.fetchone():
-                    return
+        transacao_existente = self.bot.db_manager.execute_query(
+            "SELECT 1 FROM transacoes WHERE user_id = %s AND descricao = %s",
+            (payload.user_id, f"Recompensa por reagir ao anúncio {payload.message_id}"),
+            fetch="one"
+        )
+        if transacao_existente:
+            return
         
         economia_cog = self.bot.get_cog('Economia')
         await economia_cog.depositar(payload.user_id, recompensa_reacao, f"Recompensa por reagir ao anúncio {payload.message_id}")
+        await self.registrar_renda_passiva(payload.user_id, 'reacao', recompensa_reacao)
+
 
     @tasks.loop(hours=4)
     async def enviar_mensagem_engajamento(self):

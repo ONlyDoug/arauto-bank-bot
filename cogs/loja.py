@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-import contextlib
 from utils.permissions import check_permission_level
 
 class Loja(commands.Cog):
@@ -8,18 +7,9 @@ class Loja(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @contextlib.contextmanager
-    def get_db_connection(self):
-        conn = None
-        try:
-            conn = self.bot.db_pool.getconn()
-            yield conn
-        finally:
-            if conn: self.bot.db_pool.putconn(conn)
-
     @commands.command(name='loja')
     async def ver_loja(self, ctx):
-        with self.get_db_connection() as conn:
+        with self.bot.db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT id, nome, preco, descricao FROM loja ORDER BY id ASC")
                 itens = cursor.fetchall()
@@ -35,7 +25,7 @@ class Loja(commands.Cog):
 
     @commands.command(name='comprar')
     async def comprar_item(self, ctx, item_id: int):
-        with self.get_db_connection() as conn:
+        with self.bot.db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT nome, preco FROM loja WHERE id = %s", (item_id,))
                 item = cursor.fetchone()
@@ -45,13 +35,12 @@ class Loja(commands.Cog):
             
         nome_item, preco_item = item
         economia_cog = self.bot.get_cog('Economia')
-        saldo_user = await economia_cog.get_saldo(ctx.author.id)
-
-        if saldo_user < preco_item:
-            return await ctx.send("Você não tem saldo suficiente para comprar este item.")
-
-        await economia_cog.update_saldo(ctx.author.id, -preco_item, "compra_loja", f"Item: {nome_item} (ID: {item_id})")
-        await ctx.send(f"✅ Você comprou **{nome_item}** por `{preco_item:,} GC`.".replace(',', '.'))
+        
+        try:
+            await economia_cog.levantar(ctx.author.id, preco_item, f"Compra na loja: {nome_item}")
+            await ctx.send(f"✅ Você comprou **{nome_item}** por `{preco_item:,} GC`.".replace(',', '.'))
+        except ValueError as e:
+            await ctx.send(f"❌ Erro: {e}")
 
     @commands.command(name='additem')
     @check_permission_level(4)
@@ -63,7 +52,7 @@ class Loja(commands.Cog):
         nome = partes[0].strip()
         descricao = partes[1].strip() if len(partes) > 1 else "Sem descrição."
 
-        with self.get_db_connection() as conn:
+        with self.bot.db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("INSERT INTO loja (id, nome, preco, descricao) VALUES (%s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET nome = EXCLUDED.nome, preco = EXCLUDED.preco, descricao = EXCLUDED.descricao",
                                (item_id, nome, preco, descricao))
@@ -73,7 +62,7 @@ class Loja(commands.Cog):
     @commands.command(name='delitem')
     @check_permission_level(4)
     async def del_item(self, ctx, item_id: int):
-        with self.get_db_connection() as conn:
+        with self.bot.db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("DELETE FROM loja WHERE id = %s RETURNING nome", (item_id,))
                 item_removido = cursor.fetchone()

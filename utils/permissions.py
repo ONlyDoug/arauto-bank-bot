@@ -6,7 +6,7 @@ def check_permission_level(level: int):
             user = ctx_or_interaction.author
             channel = ctx_or_interaction.channel
             bot = ctx_or_interaction.bot
-        else:
+        else: # Is an Interaction
             user = ctx_or_interaction.user
             channel = ctx_or_interaction.channel
             bot = ctx_or_interaction.client

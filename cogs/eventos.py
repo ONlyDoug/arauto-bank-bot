@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-import contextlib
 from utils.permissions import check_permission_level
 
 class Eventos(commands.Cog):
@@ -8,22 +7,13 @@ class Eventos(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @contextlib.contextmanager
-    def get_db_connection(self):
-        conn = None
-        try:
-            conn = self.bot.db_pool.getconn()
-            yield conn
-        finally:
-            if conn: self.bot.db_pool.putconn(conn)
-
     @commands.command(name='criarevento')
     @check_permission_level(1)
     async def criar_evento(self, ctx, recompensa: int, meta: int, *, nome: str):
         if recompensa <= 0 or meta <= 0:
             return await ctx.send("A recompensa e a meta devem ser valores positivos.")
         
-        with self.get_db_connection() as conn:
+        with self.bot.db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("INSERT INTO eventos (nome, recompensa, meta_participacao, criador_id) VALUES (%s, %s, %s, %s) RETURNING id",
                                (nome, recompensa, meta, ctx.author.id))
@@ -34,7 +24,7 @@ class Eventos(commands.Cog):
 
     @commands.command(name='listareventos')
     async def listar_eventos(self, ctx):
-        with self.get_db_connection() as conn:
+        with self.bot.db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT id, nome, recompensa, meta_participacao FROM eventos WHERE ativo = TRUE")
                 eventos = cursor.fetchall()
@@ -51,7 +41,7 @@ class Eventos(commands.Cog):
 
     @commands.command(name='participar')
     async def participar(self, ctx, evento_id: int):
-        with self.get_db_connection() as conn:
+        with self.bot.db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT 1 FROM eventos WHERE id = %s AND ativo = TRUE", (evento_id,))
                 if not cursor.fetchone():
@@ -68,7 +58,7 @@ class Eventos(commands.Cog):
         if not membros:
             return await ctx.send("Você precisa de mencionar pelo menos um membro.")
             
-        with self.get_db_connection() as conn:
+        with self.bot.db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT 1 FROM eventos WHERE id = %s AND ativo = TRUE", (evento_id,))
                 if not cursor.fetchone():
@@ -83,28 +73,28 @@ class Eventos(commands.Cog):
     @commands.command(name='finalizarevento')
     @check_permission_level(1)
     async def finalizar_evento(self, ctx, evento_id: int):
-        with self.get_db_connection() as conn:
+        with self.bot.db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT recompensa, meta_participacao FROM eventos WHERE id = %s AND ativo = TRUE", (evento_id,))
+                cursor.execute("SELECT recompensa, meta_participacao, nome FROM eventos WHERE id = %s AND ativo = TRUE", (evento_id,))
                 evento_info = cursor.fetchone()
                 if not evento_info:
                     return await ctx.send("Evento não encontrado ou já finalizado.")
                 
-                recompensa, meta = evento_info
+                recompensa, meta, nome_evento = evento_info
                 cursor.execute("SELECT user_id FROM participantes WHERE evento_id = %s AND progresso >= %s", (evento_id, meta))
-                vencedores = [row[0] for row in cursor.fetchall()]
+                vencedores_ids = [row[0] for row in cursor.fetchall()]
                 
                 cursor.execute("UPDATE eventos SET ativo = FALSE WHERE id = %s", (evento_id,))
             conn.commit()
 
-        if not vencedores:
-            return await ctx.send(f"Evento ID {evento_id} finalizado. Nenhum participante atingiu a meta.")
+        if not vencedores_ids:
+            return await ctx.send(f"Evento '{nome_evento}' (ID: {evento_id}) finalizado. Nenhum participante atingiu a meta.")
 
         economia_cog = self.bot.get_cog('Economia')
-        for user_id in vencedores:
-            await economia_cog.update_saldo(user_id, recompensa, "recompensa_evento", f"Evento ID {evento_id}")
+        for user_id in vencedores_ids:
+            await economia_cog.depositar(user_id, recompensa, f"Recompensa do evento '{nome_evento}'")
         
-        await ctx.send(f"🎉 Evento ID {evento_id} finalizado! {len(vencedores)} membros foram recompensados com `{recompensa} GC` cada.")
+        await ctx.send(f"🎉 Evento '{nome_evento}' (ID: {evento_id}) finalizado! {len(vencedores_ids)} membros foram recompensados com `{recompensa} GC` cada.")
 
 async def setup(bot):
     await bot.add_cog(Eventos(bot))

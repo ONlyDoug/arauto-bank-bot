@@ -22,14 +22,7 @@ class Orbes(commands.Cog):
             await ctx.send(f"❌ Cor de orbe inválida. Use uma das seguintes: {', '.join(self.cores_orbe.keys())}.")
             return
         
-        with self.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor",
-                    (f"orbe_{cor_lower}", str(valor))
-                )
-            conn.commit()
-        
+        self.db_manager.set_config_value(f"orbe_{cor_lower}", str(valor))
         await ctx.send(f"✅ Recompensa para a orbe **{self.cores_orbe[cor_lower]['nome']}** definida para **{valor}** moedas.")
 
     @commands.command(name="orbe")
