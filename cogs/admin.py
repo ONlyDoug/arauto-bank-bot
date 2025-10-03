@@ -2,6 +2,7 @@ import discord
 from discord.ext import commands
 import asyncio
 from datetime import datetime
+from utils.permissions import check_permission_level
 
 class Admin(commands.Cog):
     def __init__(self, bot):
@@ -56,12 +57,11 @@ class Admin(commands.Cog):
         
     async def create_and_pin(self, ctx, *, category, name, embed, overwrites=None, set_config_key=None):
         try:
-            # Garante que 'overwrites' é um dicionário se não for fornecido
             if overwrites is None:
                 overwrites = {}
 
             channel = await category.create_text_channel(name, overwrites=overwrites)
-            await asyncio.sleep(1.5) # Atraso para evitar rate limit
+            await asyncio.sleep(1.5)
             msg = await channel.send(embed=embed)
             await msg.pin()
             
@@ -171,12 +171,10 @@ class Admin(commands.Cog):
         await msg_progresso.edit(content="✅ Estrutura de canais final criada e configurada com sucesso!")
 
     @commands.group(name="cargo", invoke_without_command=True)
-    @check_permission_level(4)
     async def cargo(self, ctx):
         await ctx.send("Comandos disponíveis: `!cargo definir <tipo> <@cargo>` e `!cargo permissao <nível> <@cargo>`")
 
     @cargo.command(name="definir")
-    @check_permission_level(4)
     async def cargo_definir(self, ctx, tipo: str, cargo: discord.Role):
         tipos_validos = ['membro', 'inadimplente', 'isento']
         if tipo.lower() not in tipos_validos:
@@ -187,7 +185,6 @@ class Admin(commands.Cog):
         await ctx.send(f"✅ O cargo **{tipo.capitalize()}** foi definido como {cargo.mention}.")
 
     @cargo.command(name="permissao")
-    @check_permission_level(4)
     async def cargo_permissao(self, ctx, nivel: int, cargo: discord.Role):
         if not 1 <= nivel <= 4:
             return await ctx.send("❌ O nível de permissão deve ser entre 1 e 4.")
@@ -197,24 +194,20 @@ class Admin(commands.Cog):
         await ctx.send(f"✅ O cargo {cargo.mention} foi associado ao **Nível de Permissão {nivel}**.")
     
     @commands.group(name="definircanal", invoke_without_command=True)
-    @check_permission_level(4)
     async def definir_canal(self, ctx):
         await ctx.send("Use `!definir canal <tipo> #canal`.")
     
     @definir_canal.command(name="anuncios")
-    @check_permission_level(4)
     async def definir_canal_anuncios(self, ctx, canal: discord.TextChannel):
         self.bot.db_manager.set_config_value("canal_anuncios", str(canal.id))
         await ctx.send(f"✅ O canal de anúncios foi definido como {canal.mention}.")
 
     @definir_canal.command(name="batepapo")
-    @check_permission_level(4)
     async def definir_canal_batepapo(self, ctx, canal: discord.TextChannel):
         self.bot.db_manager.set_config_value("canal_batepapo", str(canal.id))
         await ctx.send(f"✅ O canal de bate-papo para mensagens de engajamento foi definido como {canal.mention}.")
 
     @commands.command(name="anunciar")
-    @check_permission_level(3)
     async def anunciar(self, ctx, tipo_canal: str, *, mensagem: str):
         tipos_validos = {
             "mercado": "canal_mercado",
@@ -249,5 +242,14 @@ class Admin(commands.Cog):
 
 
 async def setup(bot):
-    await bot.add_cog(Admin(bot))
+    cog = Admin(bot)
+    # Adiciona os checks de permissão a todos os comandos do cog
+    for command in cog.get_commands():
+        if isinstance(command, commands.Group):
+            for sub_command in command.commands:
+                sub_command.add_check(check_permission_level(4))
+        else:
+            if command.name not in ['setup', 'initdb']: # exceções
+                command.add_check(check_permission_level(4))
+    await bot.add_cog(cog)
 
