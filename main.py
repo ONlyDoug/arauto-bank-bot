@@ -40,7 +40,8 @@ async def global_channel_check(ctx):
     if not ctx.guild:
         return True
         
-    # Se nenhuma das condições for atendida, o comando é bloqueado.
+    # Se nenhuma das condições for atendida, o comando é bloqueado silenciosamente.
+    # print(f"Comando '{ctx.command}' bloqueado para {ctx.author} no canal {ctx.channel}")
     return False
 
 class ArautoBankBot(commands.Bot):
@@ -60,11 +61,7 @@ class ArautoBankBot(commands.Bot):
         self.add_view(TaxaPrataView(self))
         print("Vistas persistentes registadas.")
 
-        cogs_to_load = [
-            'cogs.admin', 'cogs.economia', 'cogs.eventos', 'cogs.loja', 
-            'cogs.taxas', 'cogs.engajamento', 'cogs.orbes', 'cogs.utilidades'
-        ]
-        
+        # Carrega o Admin Cog primeiro para garantir que a DB está pronta
         try:
             await self.load_extension('cogs.admin')
             admin_cog = self.get_cog('Admin')
@@ -75,9 +72,15 @@ class ArautoBankBot(commands.Bot):
                  raise Exception("Não foi possível carregar o Cog de Admin.")
         except Exception as e:
             print(f"ERRO CRÍTICO ao carregar ou inicializar o Admin Cog: {e}")
-            return
+            return # Impede o bot de continuar se a DB falhar
 
-        for cog_name in cogs_to_load[1:]: 
+        # Carrega os outros cogs
+        cogs_to_load = [
+            'cogs.economia', 'cogs.eventos', 'cogs.loja', 
+            'cogs.taxas', 'cogs.engajamento', 'cogs.orbes', 'cogs.utilidades'
+        ]
+
+        for cog_name in cogs_to_load: 
             try:
                 await self.load_extension(cog_name)
                 print(f"Cog '{cog_name}' carregado com sucesso.")
@@ -98,6 +101,9 @@ class ArautoBankBot(commands.Bot):
             await ctx.send(f"❌ Faltam argumentos. Use `!help {ctx.command.name}` para ver como usar o comando.", delete_after=10)
         else:
             print(f"Erro num comando: {ctx.command}: {error}")
+            # Opcional: enviar uma mensagem genérica de erro para o utilizador
+            # await ctx.send("Ocorreu um erro inesperado ao processar o comando.", delete_after=10)
+
 
 # --- Iniciar o Bot ---
 if __name__ == "__main__":
