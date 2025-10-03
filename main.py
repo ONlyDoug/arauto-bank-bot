@@ -9,8 +9,10 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
 
-# Importa o novo gestor de base de dados
+# Importa o gestor de base de dados e as Vistas Persistentes
 from utils.db_manager import DatabaseManager
+from cogs.orbes import OrbeAprovacaoView
+from cogs.taxas import TaxaPrataView
 
 # Define as intenções do bot
 intents = discord.Intents.default()
@@ -26,13 +28,18 @@ class ArautoBankBot(commands.Bot):
         super().__init__(command_prefix='!', intents=intents, case_insensitive=True)
         # Inicializa o gestor de DB
         self.db_manager = DatabaseManager(dsn=DATABASE_URL)
-        self.allowed_categories = ["🏦 ARAUTO BANK", "💸 TAXA SEMANAL"]
+        self.allowed_categories = ["🏦 ARAUTO BANK", "💸 TAXA SEMANAL", "⚙️ ADMINISTRAÇÃO"]
 
     async def setup_hook(self):
         print("A executar o setup_hook...")
 
         # Conecta o gestor de base de dados
         await self.db_manager.connect()
+
+        # Adiciona as Vistas persistentes para que os botões funcionem após reinicializações
+        self.add_view(OrbeAprovacaoView(self))
+        self.add_view(TaxaPrataView(self))
+        print("Vistas persistentes registadas.")
 
         # Carrega o Cog de Admin primeiro para a inicialização da DB
         await self.load_extension('cogs.admin')
@@ -69,36 +76,34 @@ class ArautoBankBot(commands.Bot):
             await ctx.send(f"❌ Faltam argumentos. Use `!help {ctx.command.name}` para ver como usar o comando.", delete_after=10)
         else:
             print(f"Erro num comando: {ctx.command}: {error}")
-            await ctx.send(" Ocorreu um erro inesperado ao executar o comando.", delete_after=10)
+            # await ctx.send(" Ocorreu um erro inesperado ao executar o comando.", delete_after=10)
 
     # Verificação global para restringir comandos aos canais do bot
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.channel and interaction.channel.category:
-            if interaction.channel.category.name in self.allowed_categories:
-                return True
-        # Permite interações fora das categorias (ex: DMs), se aplicável no futuro
-        return True 
-
     async def on_message(self, message):
-        # Permite que DMs e mensagens de bots passem
-        if message.guild is None or message.author.bot:
-            await self.process_commands(message)
+        if message.author.bot:
             return
 
-        # Verifica se a mensagem está numa categoria permitida
-        if message.content.startswith(self.command_prefix):
-            if message.channel.category and message.channel.category.name in self.allowed_categories:
-                 await self.process_commands(message)
-            # Ignora comandos fora das categorias permitidas, exceto para admins
-            elif message.author.guild_permissions.administrator:
-                 await self.process_commands(message)
+        ctx = await self.get_context(message)
+        if ctx.command:
+            # Permite que DMs passem
+            if message.guild is None:
+                await self.process_commands(message)
+                return
+
+            # Verifica se o canal está na categoria permitida ou se o user é admin
+            is_admin = ctx.author.guild_permissions.administrator
+            is_allowed_category = ctx.channel.category and ctx.channel.category.name in self.allowed_categories
+            
+            if is_allowed_category or is_admin:
+                await self.process_commands(message)
             else:
-                # Opcional: informar o usuário
-                # await message.channel.send("Este comando só pode ser usado nos canais do Arauto Bank.", delete_after=5)
-                pass # Silenciosamente ignora
+                # Silenciosamente ignora o comando
+                return 
         else:
-            # Processa a mensagem para eventos on_message (ex: renda por chat)
+            # Permite que eventos on_message (ex: renda por chat) funcionem em qualquer canal
+            # O próprio evento on_message no cog fará a verificação se necessário
             await self.process_commands(message)
+
 
 # --- Iniciar o Bot ---
 if __name__ == "__main__":
