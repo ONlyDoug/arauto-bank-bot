@@ -2,12 +2,10 @@ import discord
 from discord.ext import commands
 import asyncio
 from datetime import datetime
-from utils.permissions import check_permission_level
 
 class Admin(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        # O db_manager é acedido através de self.bot.db_manager
 
     async def initialize_database_schema(self):
         try:
@@ -55,6 +53,27 @@ class Admin(commands.Cog):
         await ctx.send("A forçar a verificação da base de dados...")
         await self.initialize_database_schema()
         await ctx.send("✅ Verificação da base de dados concluída.")
+        
+    async def create_and_pin(self, ctx, *, category, name, embed, overwrites=None, set_config_key=None):
+        try:
+            # Garante que 'overwrites' é um dicionário se não for fornecido
+            if overwrites is None:
+                overwrites = {}
+
+            channel = await category.create_text_channel(name, overwrites=overwrites)
+            await asyncio.sleep(1.5) # Atraso para evitar rate limit
+            msg = await channel.send(embed=embed)
+            await msg.pin()
+            
+            if set_config_key and channel:
+                self.bot.db_manager.set_config_value(set_config_key, str(channel.id))
+                
+            return channel
+        except discord.Forbidden as e:
+            await ctx.send(f"❌ Erro de permissão ao criar o canal `{name}`: {e}")
+        except Exception as e:
+            await ctx.send(f"⚠️ Ocorreu um erro inesperado ao criar o canal `{name}`: {e}")
+        return None
 
     @commands.command(name='setup')
     @commands.has_permissions(administrator=True)
@@ -79,7 +98,7 @@ class Admin(commands.Cog):
                     except Exception as e: print(f"Não foi possível apagar o canal {channel.name}: {e}")
                 try: await category.delete()
                 except Exception as e: print(f"Não foi possível apagar a categoria {category.name}: {e}")
-                await asyncio.sleep(2)
+                await asyncio.sleep(1.5)
         
         await msg_progresso.edit(content="🔥 Estrutura antiga removida. A criar a nova...")
 
@@ -92,77 +111,62 @@ class Admin(commands.Cog):
         if perm_nivel_4_role: 
             admin_overwrites[perm_nivel_4_role] = discord.PermissionOverwrite(view_channel=True)
 
-        async def create_and_pin(category, name, embed, overwrites=None, set_config_key=None):
-            try:
-                channel = await category.create_text_channel(name, overwrites=overwrites)
-                await asyncio.sleep(2)
-                msg = await channel.send(embed=embed)
-                await msg.pin()
-                if set_config_key and channel:
-                    self.bot.db_manager.set_config_value(set_config_key, str(channel.id))
-                return channel
-            except discord.Forbidden as e:
-                await ctx.send(f"❌ Erro de permissão ao criar o canal `{name}`: {e}")
-            except Exception as e:
-                await ctx.send(f"⚠️ Ocorreu um erro inesperado ao criar o canal `{name}`: {e}")
-            return None
-
         # 1. Categoria Principal
         cat_bank = await guild.create_category("🏦 ARAUTO BANK")
-        await asyncio.sleep(2)
+        await asyncio.sleep(1.5)
         
         embed = discord.Embed(title="🎓｜Como Usar o Arauto Bank", description="Bem-vindo ao centro nevrálgico da nossa economia! Aqui pode aprender a usar o bot, consultar o seu saldo e muito mais.", color=0xffd700)
         embed.add_field(name="Comece por aqui", value="Cada canal tem uma mensagem fixada que explica o seu propósito. Leia-as para entender como tudo funciona.", inline=False)
         embed.add_field(name="Comandos Essenciais", value="`!saldo` - Vê o seu saldo de moedas.\n`!extrato` - Vê o seu histórico de transações.\n`!loja` - Mostra os itens que pode comprar.\n`!info-moeda` - Vê a saúde da nossa economia.", inline=False)
-        await create_and_pin(category=cat_bank, name="🎓｜como-usar-o-bot", embed=embed, overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
+        await self.create_and_pin(ctx, category=cat_bank, name="🎓｜como-usar-o-bot", embed=embed, overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
 
         embed = discord.Embed(title="📈｜Mercado Financeiro", description="A nossa moeda tem valor real! O seu valor é **lastreado** (garantido) pela prata guardada no tesouro da guilda.", color=0x1abc9c)
         embed.add_field(name="O que é o Lastro?", value="Significa que para cada moeda em circulação, existe uma quantidade correspondente de prata guardada. Isto garante que a nossa moeda nunca perde o seu valor.", inline=False)
         embed.add_field(name="Comando Útil", value="Use `!info-moeda` para ver o total de prata no tesouro, a taxa de conversão atual e quantas moedas existem no total.", inline=False)
-        await create_and_pin(category=cat_bank, name="📈｜mercado-financeiro", embed=embed, set_config_key='canal_mercado', overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
+        await self.create_and_pin(ctx, category=cat_bank, name="📈｜mercado-financeiro", embed=embed, set_config_key='canal_mercado', overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
         
         embed = discord.Embed(title="💰｜Minha Conta", description="Este é o seu espaço pessoal para gerir as suas finanças.", color=0x2ecc71)
         embed.add_field(name="Comandos de Gestão", value="`!saldo` - Vê o seu saldo atual.\n`!saldo @membro` - Vê o saldo de outro membro.\n`!extrato` - Mostra o seu extrato do dia.\n`!extrato AAAA-MM-DD` - Vê o extrato de um dia específico.\n`!transferir @membro <valor>` - Envia moedas para outro membro.", inline=False)
-        await create_and_pin(category=cat_bank, name="💰｜minha-conta", embed=embed)
+        await self.create_and_pin(ctx, category=cat_bank, name="💰｜minha-conta", embed=embed)
 
         embed = discord.Embed(title="🛍️｜Loja da Guilda", description="Todo o seu esforço é recompensado! Use as suas moedas para comprar itens valiosos.", color=0x3498db)
         embed.add_field(name="Como Comprar", value="1. Use `!loja` para ver a lista de itens disponíveis e os seus IDs.\n2. Use `!comprar <ID_do_item>` para fazer a sua compra.", inline=False)
-        await create_and_pin(category=cat_bank, name="🛍️｜loja-da-guilda", embed=embed)
+        await self.create_and_pin(ctx, category=cat_bank, name="🛍️｜loja-da-guilda", embed=embed)
         
         embed = discord.Embed(title="🏆｜Eventos e Missões", description="A principal forma de ganhar moedas! Participar nos conteúdos da guilda é a sua maior fonte de renda.", color=0xe91e63)
         embed.add_field(name="Como Participar", value="1. Use `!listareventos` para ver as missões ativas.\n2. Inscreva-se com `!participar <ID_do_evento>`.\n3. Participe no evento e garanta que o líder confirma a sua presença!", inline=False)
-        await create_and_pin(category=cat_bank, name="🏆｜eventos-e-missões", embed=embed)
+        await self.create_and_pin(ctx, category=cat_bank, name="🏆｜eventos-e-missões", embed=embed)
 
         embed = discord.Embed(title="🔮｜Submeter Orbes", description="Apanhou uma orbe? Registe-a aqui para ganhar uma recompensa para si e para o seu grupo!", color=0x9b59b6)
         embed.add_field(name="Como Submeter", value="Anexe o print da captura da orbe nesta sala e use o comando:\n`!orbe <cor> <@membro1> <@membro2> ...`", inline=False)
-        await create_and_pin(category=cat_bank, name="🔮｜submeter-orbes", embed=embed, set_config_key='canal_orbes')
+        await self.create_and_pin(ctx, category=cat_bank, name="🔮｜submeter-orbes", embed=embed, set_config_key='canal_orbes')
         
         # 2. Categoria de Taxas
         cat_taxas = await guild.create_category("💸 TAXA SEMANAL")
-        await asyncio.sleep(2)
+        await asyncio.sleep(1.5)
 
         embed = discord.Embed(title="ℹ️｜Como Funciona a Taxa", description="A taxa semanal é um sistema automático que ajuda a financiar os projetos e as atividades da guilda.", color=0x7f8c8d)
         embed.add_field(name="Como funciona?", value="Uma vez por semana, o bot tenta debitar automaticamente o valor da taxa do seu `!saldo`. Se não tiver saldo, o seu cargo será temporariamente alterado.", inline=False)
         embed.add_field(name="Como Regularizar?", value="Vá ao canal `🪙｜pagamento-de-taxas` e use `!pagar-taxa` ou `!paguei-prata`.", inline=False)
-        await create_and_pin(category=cat_taxas, name="ℹ️｜como-funciona-a-taxa", embed=embed, overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
+        await self.create_and_pin(ctx, category=cat_taxas, name="ℹ️｜como-funciona-a-taxa", embed=embed, overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
         
         embed = discord.Embed(title="🪙｜Pagamento de Taxas", description="Use este canal para regularizar a sua situação se estiver com a taxa em atraso.", color=0x95a5a6)
         embed.add_field(name="Pagar com Moedas", value="Use o comando `!pagar-taxa`.", inline=False)
         embed.add_field(name="Pagar com Prata", value="Anexe o print do comprovativo de pagamento no jogo e use o comando `!paguei-prata`.", inline=False)
-        await create_and_pin(category=cat_taxas, name="🪙｜pagamento-de-taxas", embed=embed)
+        await self.create_and_pin(ctx, category=cat_taxas, name="🪙｜pagamento-de-taxas", embed=embed)
 
         # 3. Categoria de Administração
         cat_admin = await guild.create_category("⚙️ ADMINISTRAÇÃO", overwrites=admin_overwrites)
-        await asyncio.sleep(2)
+        await asyncio.sleep(1.5)
         
         embed = discord.Embed(title="✅｜Aprovações", description="Este canal é para uso exclusivo da staff. Aqui aparecerão todas as submissões de orbes e pagamentos de taxa.", color=0xf1c40f)
-        await create_and_pin(category=cat_admin, name="✅｜aprovações", embed=embed, set_config_key='canal_aprovacao')
+        await self.create_and_pin(ctx, category=cat_admin, name="✅｜aprovações", embed=embed, set_config_key='canal_aprovacao')
 
         embed = discord.Embed(title="🚨｜Resgates Staff", description="Este canal notifica a equipa financeira sempre que um resgate de moedas por prata é processado.", color=0xe74c3c)
-        await create_and_pin(category=cat_admin, name="🚨｜resgates-staff", embed=embed, set_config_key='canal_resgates')
+        await self.create_and_pin(ctx, category=cat_admin, name="🚨｜resgates-staff", embed=embed, set_config_key='canal_resgates')
 
         embed = discord.Embed(title="🔩｜Comandos Admin", description="Utilize este canal para todos os comandos de gestão e configuração do bot.", color=0xe67e22)
-        await create_and_pin(category=cat_admin, name="🔩｜comandos-admin", embed=embed)
+        await self.create_and_pin(ctx, category=cat_admin, name="🔩｜comandos-admin", embed=embed)
         
         await msg_progresso.edit(content="✅ Estrutura de canais final criada e configurada com sucesso!")
 
@@ -191,13 +195,7 @@ class Admin(commands.Cog):
         chave = f"perm_nivel_{nivel}"
         self.bot.db_manager.set_config_value(chave, str(cargo.id))
         await ctx.send(f"✅ O cargo {cargo.mention} foi associado ao **Nível de Permissão {nivel}**.")
-
-    @commands.command(name="definir")
-    @check_permission_level(4)
-    async def definir(self, ctx, *args):
-        # Este comando agrupa os !definir...
-        await ctx.send("Comando movido. Use `!definir canal`, `!definir lastro` ou `!definir recompensa/limite`.")
-
+    
     @commands.group(name="definircanal", invoke_without_command=True)
     @check_permission_level(4)
     async def definir_canal(self, ctx):
@@ -214,6 +212,41 @@ class Admin(commands.Cog):
     async def definir_canal_batepapo(self, ctx, canal: discord.TextChannel):
         self.bot.db_manager.set_config_value("canal_batepapo", str(canal.id))
         await ctx.send(f"✅ O canal de bate-papo para mensagens de engajamento foi definido como {canal.mention}.")
+
+    @commands.command(name="anunciar")
+    @check_permission_level(3)
+    async def anunciar(self, ctx, tipo_canal: str, *, mensagem: str):
+        tipos_validos = {
+            "mercado": "canal_mercado",
+            "batepapo": "canal_batepapo"
+        }
+        if tipo_canal.lower() not in tipos_validos:
+            return await ctx.send("❌ Tipo de canal inválido. Use `mercado` ou `batepapo`.")
+        
+        chave_canal = tipos_validos[tipo_canal.lower()]
+        canal_id = self.bot.db_manager.get_config_value(chave_canal)
+
+        if not canal_id or canal_id == '0':
+            return await ctx.send(f"⚠️ O canal `{tipo_canal}` ainda não foi configurado. Use `!definircanal`.")
+
+        canal = self.bot.get_channel(int(canal_id))
+        if not canal:
+            return await ctx.send("❌ Canal não encontrado. Verifique se o bot tem acesso a ele.")
+
+        embed = discord.Embed(
+            title="📢 Anúncio da Administração",
+            description=mensagem,
+            color=discord.Color.blue(),
+            timestamp=datetime.utcnow()
+        )
+        embed.set_footer(text=f"Anunciado por: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+        
+        try:
+            await canal.send(embed=embed)
+            await ctx.send("✅ Anúncio enviado com sucesso!", delete_after=10)
+        except discord.Forbidden:
+            await ctx.send("❌ O bot não tem permissão para enviar mensagens nesse canal.")
+
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))

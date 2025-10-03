@@ -24,25 +24,24 @@ intents.reactions = True
 
 # --- CHECK GLOBAL PARA RESTRIÇÃO DE CANAIS (LÓGICA CORRIGIDA) ---
 async def global_channel_check(ctx):
-    # 1. Admins podem usar qualquer comando em qualquer lugar. É a regra principal.
+    # Admins podem usar qualquer comando em qualquer lugar.
     if ctx.author.guild_permissions.administrator:
         return True
     
-    # 2. O comando !setup é uma exceção e pode ser usado em qualquer lugar (a permissão de admin é verificada no próprio comando).
+    # O comando !setup é uma exceção.
     if ctx.command and ctx.command.name == 'setup':
         return True
     
-    # 3. Para outros usuários, o comando só funciona nas categorias permitidas.
+    # Para outros, o comando só funciona nas categorias permitidas.
     if ctx.guild and ctx.channel.category and ctx.channel.category.name in ctx.bot.allowed_categories:
         return True
-    
-    # 4. Permite comandos em DMs (mensagens privadas).
-    if not ctx.guild:
-        return True
         
-    # Se nenhuma das condições for atendida, o comando é bloqueado silenciosamente.
-    # print(f"Comando '{ctx.command}' bloqueado para {ctx.author} no canal {ctx.channel}")
-    return False
+    # Bloqueia silenciosamente noutros canais de texto do servidor.
+    if ctx.guild:
+        return False
+
+    # Permite comandos em DMs (mensagens privadas).
+    return True
 
 class ArautoBankBot(commands.Bot):
     def __init__(self):
@@ -72,7 +71,7 @@ class ArautoBankBot(commands.Bot):
                  raise Exception("Não foi possível carregar o Cog de Admin.")
         except Exception as e:
             print(f"ERRO CRÍTICO ao carregar ou inicializar o Admin Cog: {e}")
-            return # Impede o bot de continuar se a DB falhar
+            return
 
         # Carrega os outros cogs
         cogs_to_load = [
@@ -83,7 +82,6 @@ class ArautoBankBot(commands.Bot):
         for cog_name in cogs_to_load: 
             try:
                 await self.load_extension(cog_name)
-                print(f"Cog '{cog_name}' carregado com sucesso.")
             except Exception as e:
                 print(f"ERRO ao carregar o cog '{cog_name}': {e}")
         
@@ -94,16 +92,12 @@ class ArautoBankBot(commands.Bot):
         print('------')
 
     async def on_command_error(self, ctx, error):
-        # Ignora erros que são tratados (comandos não encontrados, falhas de permissão)
         if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
             return
         if isinstance(error, commands.MissingRequiredArgument):
             await ctx.send(f"❌ Faltam argumentos. Use `!help {ctx.command.name}` para ver como usar o comando.", delete_after=10)
         else:
             print(f"Erro num comando: {ctx.command}: {error}")
-            # Opcional: enviar uma mensagem genérica de erro para o utilizador
-            # await ctx.send("Ocorreu um erro inesperado ao processar o comando.", delete_after=10)
-
 
 # --- Iniciar o Bot ---
 if __name__ == "__main__":
