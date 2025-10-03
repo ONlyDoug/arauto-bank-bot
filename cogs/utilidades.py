@@ -1,163 +1,166 @@
 import discord
 from discord.ext import commands
-import contextlib
 from utils.permissions import check_permission_level
 from datetime import datetime, date
-
-ID_TESOURO_GUILDA = 1
 
 class Utilidades(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.db_manager = self.bot.db_manager
+        self.ID_TESOURO_GUILDA = 1
 
-    @contextlib.contextmanager
-    def get_db_connection(self):
-        conn = None
-        try:
-            conn = self.bot.db_pool.getconn()
-            yield conn
-        finally:
-            if conn: self.bot.db_pool.putconn(conn)
-    
-    @commands.command(name='status')
+    @commands.command(name="status")
     async def status(self, ctx):
-        latency = round(self.bot.latency * 1000)
-        await ctx.send(f"Pong! Latência: `{latency}ms`. O Arauto Bank está operacional.")
+        """Verifica a latência e o estado do bot."""
+        latencia = round(self.bot.latency * 1000)
+        await ctx.send(f"Pong! 🏓 Latência: **{latencia}ms**. O Arauto Bank está operacional.")
 
-    @commands.command(name='extrato')
+    @commands.command(name="info-moeda", aliases=["infomoeda"])
+    async def info_moeda(self, ctx):
+        """Mostra as estatísticas vitais da economia da guilda."""
+        total_prata = int(self.db_manager.get_config_value('lastro_total_prata', '0'))
+        taxa_conversao = int(self.db_manager.get_config_value('taxa_conversao_prata', '1000'))
+        
+        suprimento_maximo = total_prata // taxa_conversao if taxa_conversao > 0 else 0
+        saldo_tesouro = 0
+        
+        with self.db_manager.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT saldo FROM banco WHERE user_id = %s", (self.ID_TESOURO_GUILDA,))
+                resultado = cursor.fetchone()
+                saldo_tesouro = resultado[0] if resultado else 0
+
+        moedas_em_circulacao = suprimento_maximo - saldo_tesouro
+
+        embed = discord.Embed(
+            title="📈 Estatísticas do Arauto Bank",
+            color=discord.Color.from_rgb(230, 230, 250) # Lilás claro
+        )
+        embed.add_field(name="Lastro Total de Prata", value=f"**{total_prata:,}** 🥈", inline=False)
+        embed.add_field(name="Taxa de Conversão", value=f"1 🪙 = **{taxa_conversao:,}** 🥈", inline=False)
+        embed.add_field(name="Suprimento Máximo de Moedas", value=f"**{suprimento_maximo:,}** 🪙", inline=True)
+        embed.add_field(name="Moedas no Tesouro", value=f"**{saldo_tesouro:,}** 🪙", inline=True)
+        embed.add_field(name="Moedas em Circulação", value=f"**{moedas_em_circulacao:,}** 🪙", inline=True)
+
+        await ctx.send(embed=embed)
+
+    @commands.command(name="extrato")
     async def extrato(self, ctx, data_str: str = None):
-        """Mostra o extrato de um dia específico, incluindo um resumo de ganhos passivos."""
-        target_date = None
+        """Mostra o seu extrato de transações para uma data específica (formato AAAA-MM-DD)."""
         if data_str:
             try:
-                target_date = datetime.strptime(data_str, '%Y-%m-%d').date()
+                data_alvo = datetime.strptime(data_str, '%Y-%m-%d').date()
             except ValueError:
-                return await ctx.send("Formato de data inválido. Use `AAAA-MM-DD` ou deixe em branco para ver o dia de hoje.")
+                await ctx.send("❌ Formato de data inválido. Por favor, use AAAA-MM-DD (ex: `!extrato 2025-10-03`).")
+                return
         else:
-            target_date = date.today()
+            data_alvo = date.today()
 
-        with self.get_db_connection() as conn:
+        user_id = ctx.author.id
+        
+        with self.db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
+                # Busca transações normais
                 cursor.execute(
-                    "SELECT minutos_voz, moedas_chat FROM atividade_diaria WHERE user_id = %s AND data = %s",
-                    (ctx.author.id, target_date)
-                )
-                ganhos_passivos = cursor.fetchone()
-                
-                start_of_day = datetime.combine(target_date, datetime.min.time())
-                end_of_day = datetime.combine(target_date, datetime.max.time())
-                cursor.execute(
-                    "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND data BETWEEN %s AND %s ORDER BY data DESC",
-                    (ctx.author.id, start_of_day, end_of_day)
+                    "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND DATE(data) = %s AND tipo NOT IN ('deposito_voz', 'deposito_chat', 'deposito_reacao') ORDER BY data DESC",
+                    (user_id, data_alvo)
                 )
                 transacoes = cursor.fetchall()
-
-        if not ganhos_passivos and not transacoes:
-            return await ctx.send(f"Não há nenhuma atividade registada para o dia {target_date.strftime('%d/%m/%Y')}.")
+                
+                # Busca o total de renda passiva para o dia
+                cursor.execute(
+                    "SELECT tipo, SUM(valor) FROM renda_passiva_log WHERE user_id = %s AND data = %s GROUP BY tipo",
+                    (user_id, data_alvo)
+                )
+                renda_passiva = cursor.fetchall()
 
         embed = discord.Embed(
             title=f"📜 Extrato de {ctx.author.display_name}",
-            description=f"Atividade do dia: **{target_date.strftime('%d de %B de %Y')}**",
+            description=f"Transações para a data: **{data_alvo.strftime('%d/%m/%Y')}**",
             color=discord.Color.blue()
         )
+        embed.set_thumbnail(url=ctx.author.display_avatar.url)
 
-        if ganhos_passivos:
-            minutos_voz, moedas_chat = ganhos_passivos
-            admin_cog = self.bot.get_cog('Admin')
-            recompensa_voz_por_ciclo = int(admin_cog.get_config_value('recompensa_voz', '0'))
-            
-            moedas_voz = (minutos_voz // 5) * recompensa_voz_por_ciclo
-            
-            resumo_passivo = []
-            if moedas_voz > 0: resumo_passivo.append(f"🎙️ **Voz:** `{moedas_voz}`")
-            if moedas_chat > 0: resumo_passivo.append(f"💬 **Chat:** `{moedas_chat}`")
-            
-            if resumo_passivo:
-                 embed.add_field(name="Resumo de Ganhos Passivos do Dia", value=" | ".join(resumo_passivo), inline=False)
+        # Adiciona o resumo de Renda Passiva
+        if renda_passiva:
+            renda_texto = ""
+            for tipo, total in renda_passiva:
+                if tipo == 'voz':
+                    renda_texto += f"🎤 **Voz:** Ganhou **{total} minutos** de tempo de call.\n"
+                elif tipo == 'chat':
+                    renda_texto += f"💬 **Chat:** Ganhou **{total} moedas** por atividade no chat.\n"
+            if renda_texto:
+                embed.add_field(name="Resumo de Atividade Passiva", value=renda_texto, inline=False)
 
+        # Adiciona as outras transações
         if transacoes:
-            lista_transacoes = []
-            for tipo, valor, descricao, data in transacoes:
-                timestamp = int(data.timestamp())
-                emoji = "📥" if valor > 0 else "📤"
-                valor_formatado = f"{valor:,}".replace(',', '.')
-                desc_final = f"*({descricao})*" if descricao and "passiva" not in tipo else ""
-                lista_transacoes.append(f"{emoji} **{valor_formatado} GC** às <t:{timestamp}:T> | `{tipo}` {desc_final}")
+            texto_transacoes = ""
+            for tipo, valor, descricao, data in transacoes[:10]: # Limita a 10 transações
+                emoji = "📥" if tipo == 'deposito' else "📤"
+                sinal = "+" if tipo == 'deposito' else "-"
+                texto_transacoes += f"{emoji} `{data.strftime('%H:%M')}`: **{sinal}{valor}** moedas ({descricao})\n"
             
-            if lista_transacoes:
-                embed.add_field(name="\nTransações do Dia", value="\n".join(lista_transacoes), inline=False)
+            embed.add_field(name="Transações Principais", value=texto_transacoes, inline=False)
         
-        elif not transacoes and ganhos_passivos:
-            embed.add_field(name="\nTransações do Dia", value="Nenhuma transação ativa registada.", inline=False)
+        if not renda_passiva and not transacoes:
+            embed.description += "\n\nNenhuma atividade registada para esta data."
 
         await ctx.send(embed=embed)
 
-
-    @commands.command(name='info-moeda', aliases=['infomoeda', 'lastro'])
-    async def info_moeda(self, ctx):
-        admin_cog = self.bot.get_cog('Admin')
-        lastro_total_prata = int(admin_cog.get_config_value('lastro_total_prata', '0'))
-        taxa_conversao = int(admin_cog.get_config_value('taxa_conversao_prata', '1000'))
-        
-        suprimento_maximo = lastro_total_prata // taxa_conversao if taxa_conversao > 0 else 0
-
-        with self.get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT saldo FROM banco WHERE user_id = %s", (ID_TESOURO_GUILDA,))
-                moedas_tesouro = (cursor.fetchone() or [0])[0]
-                cursor.execute("SELECT SUM(saldo) FROM banco WHERE user_id != %s", (ID_TESOURO_GUILDA,))
-                moedas_em_circulacao = (cursor.fetchone() or [0])[0] or 0
-        
-        embed = discord.Embed(title="📈 Estatísticas do Arauto Bank", color=0x1abc9c)
-        embed.add_field(name="🥈 Lastro Total de Prata", value=f"**{lastro_total_prata:,}**".replace(',', '.'), inline=False)
-        embed.add_field(name="💱 Taxa de Conversão", value=f"`1 🪙 = {taxa_conversao:,} 🥈`".replace(',', '.'), inline=False)
-        embed.add_field(name="🏦 Suprimento Máximo de Moedas", value=f"{suprimento_maximo:,}".replace(',', '.'), inline=True)
-        embed.add_field(name="💰 Moedas no Tesouro", value=f"{moedas_tesouro:,}".replace(',', '.'), inline=True)
-        embed.add_field(name="💸 Moedas em Circulação", value=f"{moedas_em_circulacao:,}".replace(',', '.'), inline=True)
-        
-        await ctx.send(embed=embed)
-    
-    @commands.command(name='definir-lastro')
-    @check_permission_level(4)
-    async def definir_lastro(self, ctx, total_prata: int):
-        if total_prata < 0:
-            return await ctx.send("O valor do lastro não pode ser negativo.")
-        self.bot.get_cog('Admin').set_config_value('lastro_total_prata', str(total_prata))
-        await ctx.send(f"✅ O lastro total de prata foi definido para **{total_prata:,}**.".replace(',', '.'))
-
-    @commands.command(name='resgatar')
+    @commands.command(name="resgatar")
     @check_permission_level(3)
-    async def resgatar(self, ctx, membro: discord.Member, valor_gc: int):
-        """(Nível 3+) Converte as moedas de um membro em prata."""
-        if valor_gc <= 0:
-            return await ctx.send("O valor para resgate deve ser positivo.")
+    async def resgatar(self, ctx, membro: discord.Member, valor: int):
+        if valor <= 0:
+            return await ctx.send("❌ O valor a resgatar deve ser positivo.")
 
         economia_cog = self.bot.get_cog('Economia')
         saldo_membro = await economia_cog.get_saldo(membro.id)
 
-        if saldo_membro < valor_gc:
-            return await ctx.send(f"❌ O membro {membro.mention} não tem saldo suficiente para resgatar. Saldo atual: {saldo_membro} GC.")
+        if saldo_membro < valor:
+            return await ctx.send(f"❌ O membro {membro.mention} não tem saldo suficiente. Saldo atual: **{saldo_membro}**.")
 
-        await economia_cog.update_saldo(membro.id, -valor_gc, "resgate_solicitado", f"Processado por {ctx.author.name}")
+        await economia_cog.levantar(membro.id, valor, f"Resgate de moedas por {ctx.author.name}")
 
-        admin_cog = self.bot.get_cog('Admin')
-        taxa_conversao = int(admin_cog.get_config_value('taxa_conversao_prata', '1000'))
-        valor_prata = valor_gc * taxa_conversao
+        canal_resgates_id = int(self.db_manager.get_config_value('canal_resgates', '0'))
+        if canal_resgates_id != 0:
+            canal = self.bot.get_channel(canal_resgates_id)
+            if canal:
+                taxa_conversao = int(self.db_manager.get_config_value('taxa_conversao_prata', '1000'))
+                valor_prata = valor * taxa_conversao
+                
+                embed = discord.Embed(
+                    title="🚨 Pedido de Resgate Processado",
+                    description=f"O resgate de moedas para prata foi processado no bot. A equipa financeira deve agora realizar o pagamento no jogo.",
+                    color=discord.Color.orange()
+                )
+                embed.add_field(name="Membro", value=membro.mention, inline=True)
+                embed.add_field(name="Valor em Moedas", value=f"{valor:,} 🪙", inline=True)
+                embed.add_field(name="Valor a Pagar em Prata", value=f"**{valor_prata:,}** 🥈", inline=True)
+                embed.set_footer(text=f"Processado por: {ctx.author.display_name}")
+                await canal.send(embed=embed)
 
-        canal_resgates_id = int(admin_cog.get_config_value('canal_resgates', '0'))
-        canal_resgates = self.bot.get_channel(canal_resgates_id)
+        await ctx.send(f"✅ Resgate de **{valor}** moedas para {membro.mention} processado com sucesso. A notificação foi enviada à equipa financeira.")
 
-        if canal_resgates:
-            embed = discord.Embed(title="🚨 Novo Pedido de Resgate", description=f"O jogador **{membro.display_name}** resgatou moedas.", color=0xc27c0e)
-            embed.add_field(name="Membro", value=membro.mention, inline=False)
-            embed.add_field(name="Valor em Moedas Resgatado", value=f"🪙 {valor_gc:,}".replace(',', '.'), inline=True)
-            embed.add_field(name="Valor em Prata a Pagar", value=f"🥈 {valor_prata:,}".replace(',', '.'), inline=True)
-            embed.set_footer(text="Ação: Entregar a prata no jogo e reagir com ✅.")
-            
-            await canal_resgates.send(embed=embed)
-            await ctx.send(f"✅ Pedido de resgate para {membro.mention} criado com sucesso no canal {canal_resgates.mention}.")
-        else:
-            await ctx.send("⚠️ O resgate foi processado, mas o canal de resgates não foi configurado. Use `!definircanal resgates #canal`.")
+    @commands.command(name="airdrop")
+    @check_permission_level(3)
+    async def airdrop(self, ctx, valor: int, cargo: discord.Role = None):
+        if valor <= 0:
+            return await ctx.send("❌ O valor do airdrop deve ser positivo.")
+
+        membros_alvo = cargo.members if cargo else [m for m in ctx.guild.members if not m.bot]
+        
+        if not membros_alvo:
+            return await ctx.send("❌ Nenhum membro encontrado para o airdrop.")
+
+        economia_cog = self.bot.get_cog('Economia')
+        
+        msg_espera = await ctx.send(f"A iniciar o airdrop de **{valor}** moedas para **{len(membros_alvo)}** membros. Isto pode demorar um pouco...")
+
+        for membro in membros_alvo:
+            await economia_cog.depositar(membro.id, valor, "Airdrop da Administração")
+            await asyncio.sleep(0.1) # Pequena pausa para não sobrecarregar
+
+        await msg_espera.edit(content=f"✅ Airdrop concluído com sucesso para **{len(membros_alvo)}** membros!")
 
 
 async def setup(bot):

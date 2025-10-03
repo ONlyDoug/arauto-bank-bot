@@ -1,158 +1,103 @@
 import discord
 from discord.ext import commands
-import contextlib
-import json
 from utils.permissions import check_permission_level
-
-class OrbApprovalView(discord.ui.View):
-    def __init__(self, bot, submission_id):
-        super().__init__(timeout=None)
-        self.bot = bot
-        self.submission_id = submission_id
-
-    @contextlib.contextmanager
-    def get_db_connection(self):
-        conn = None
-        try:
-            conn = self.bot.db_pool.getconn()
-            yield conn
-        finally:
-            if conn: self.bot.db_pool.putconn(conn)
-
-    @discord.ui.button(label="Aprovar", style=discord.ButtonStyle.success, custom_id=f"approve_orb")
-    async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # A verificação de permissão é feita no interaction check
-        with self.get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT membros, valor_total, autor_id, cor FROM submissoes_orbe WHERE id = %s AND status = 'pendente'", (self.submission_id,))
-                submissao = cursor.fetchone()
-                
-                if not submissao:
-                    await interaction.response.send_message("Esta submissão já foi processada.", ephemeral=True)
-                    return
-
-                membros_json, valor_total, autor_id, cor = submissao
-                membros_ids = json.loads(membros_json)
-                recompensa_individual = valor_total // len(membros_ids)
-
-                economia_cog = self.bot.get_cog('Economia')
-                for membro_id in membros_ids:
-                    await economia_cog.update_saldo(membro_id, recompensa_individual, "recompensa_orbe", f"Orbe {cor.capitalize()} (ID Sub: {self.submission_id})")
-
-                cursor.execute("UPDATE submissoes_orbe SET status = 'aprovado' WHERE id = %s", (self.submission_id,))
-            conn.commit()
-
-        original_embed = interaction.message.embeds[0]
-        original_embed.color = discord.Color.green()
-        original_embed.set_footer(text=f"Aprovado por {interaction.user.name}")
-        
-        self.clear_items()
-        await interaction.message.edit(embed=original_embed, view=self)
-        await interaction.response.send_message(f"✅ Submissão de orbe {self.submission_id} aprovada.", ephemeral=True)
-
-    @discord.ui.button(label="Recusar", style=discord.ButtonStyle.danger, custom_id=f"deny_orb")
-    async def deny_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        with self.get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("UPDATE submissoes_orbe SET status = 'recusado' WHERE id = %s AND status = 'pendente'", (self.submission_id,))
-                if cursor.rowcount == 0:
-                    await interaction.response.send_message("Esta submissão já foi processada.", ephemeral=True)
-                    return
-            conn.commit()
-
-        original_embed = interaction.message.embeds[0]
-        original_embed.color = discord.Color.red()
-        original_embed.set_footer(text=f"Recusado por {interaction.user.name}")
-
-        self.clear_items()
-        await interaction.message.edit(embed=original_embed, view=self)
-        await interaction.response.send_message(f"❌ Submissão de orbe {self.submission_id} recusada.", ephemeral=True)
-        
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Usando a função de verificação de permissão
-        author_roles_ids = {str(role.id) for role in interaction.user.roles}
-        admin_cog = self.bot.get_cog('Admin')
-        
-        for i in range(2, 5): # Nível 2 ou superior pode aprovar
-            perm_key = f'perm_nivel_{i}'
-            role_id_str = admin_cog.get_config_value(perm_key, '0')
-            if role_id_str in author_roles_ids:
-                return True
-        
-        await interaction.response.send_message("Você não tem permissão para aprovar/recusar submissões.", ephemeral=True)
-        return False
+from utils.views import OrbeAprovacaoView # Importa a View do novo ficheiro
 
 class Orbes(commands.Cog):
-    """Cog para gerir a submissão e aprovação de orbes."""
     def __init__(self, bot):
         self.bot = bot
-        self.bot.add_view(OrbApprovalView(self.bot, submission_id=0)) # Registar a view
+        self.db_manager = self.bot.db_manager
+        self.cores_orbe = {
+            "verde": {"nome": "Verde", "cor": discord.Color.green()},
+            "azul": {"nome": "Azul", "cor": discord.Color.blue()},
+            "roxa": {"nome": "Roxa", "cor": discord.Color.purple()},
+            "dourada": {"nome": "Dourada", "cor": discord.Color.gold()}
+        }
 
-    @contextlib.contextmanager
-    def get_db_connection(self):
-        conn = None
-        try:
-            conn = self.bot.db_pool.getconn()
-            yield conn
-        finally:
-            if conn: self.bot.db_pool.putconn(conn)
-
-    @commands.command(name='config-orbe')
+    @commands.command(name="config-orbe")
     @check_permission_level(4)
     async def config_orbe(self, ctx, cor: str, valor: int):
-        cor = cor.lower()
-        if cor not in ['verde', 'azul', 'roxa', 'dourada']:
-            return await ctx.send("Cor inválida. Use: verde, azul, roxa, dourada.")
-        if valor < 0:
-            return await ctx.send("O valor não pode ser negativo.")
-            
-        self.bot.get_cog('Admin').set_config_value(f'orbe_{cor}', str(valor))
-        await ctx.send(f"✅ O valor da orbe **{cor}** foi definido para `{valor} GC`.")
-
-    @commands.command(name='orbe')
-    async def submeter_orbe(self, ctx, cor: str, membros: commands.Greedy[discord.Member]):
-        cor = cor.lower()
-        if cor not in ['verde', 'azul', 'roxa', 'dourada']:
-            return await ctx.send("Cor inválida. Use: verde, azul, roxa, dourada.")
+        cor_lower = cor.lower()
+        if cor_lower not in self.cores_orbe:
+            await ctx.send(f"❌ Cor de orbe inválida. Use uma das seguintes: {', '.join(self.cores_orbe.keys())}.")
+            return
         
-        if not ctx.message.attachments:
-            return await ctx.send("Você precisa de anexar um print (screenshot) da captura!")
-
-        participantes = list(set([ctx.author] + membros))
-        if not participantes:
-            return await ctx.send("Você precisa de mencionar pelo menos um membro participante (ou será apenas você).")
-
-        valor_total = int(self.bot.get_cog('Admin').get_config_value(f'orbe_{cor}', '0'))
-        if valor_total == 0:
-            return await ctx.send(f"A recompensa para a orbe **{cor}** ainda não foi configurada.")
-
-        canal_aprovacao_id = int(self.bot.get_cog('Admin').get_config_value('canal_aprovacao', '0'))
-        canal_aprovacao = self.bot.get_channel(canal_aprovacao_id)
-        if not canal_aprovacao:
-            return await ctx.send("O canal de aprovações não foi configurado. Contacte um administrador.")
-
-        membros_ids_json = json.dumps([p.id for p in participantes])
-
-        with self.get_db_connection() as conn:
+        with self.db_manager.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "INSERT INTO submissoes_orbe (cor, valor_total, autor_id, membros, status) VALUES (%s, %s, %s, %s, 'pendente') RETURNING id",
-                    (cor, valor_total, ctx.author.id, membros_ids_json)
+                    "INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor",
+                    (f"orbe_{cor_lower}", str(valor))
                 )
-                submission_id = cursor.fetchone()[0]
             conn.commit()
+        
+        await ctx.send(f"✅ Recompensa para a orbe **{self.cores_orbe[cor_lower]['nome']}** definida para **{valor}** moedas.")
 
-        embed = discord.Embed(title=f"🔮 Submissão de Orbe #{submission_id}", color=0xf1c40f)
-        embed.add_field(name="Autor", value=ctx.author.mention, inline=True)
-        embed.add_field(name="Cor da Orbe", value=cor.capitalize(), inline=True)
-        embed.add_field(name="Recompensa Total", value=f"`{valor_total} GC`", inline=True)
-        embed.add_field(name="Participantes", value=", ".join([p.mention for p in participantes]), inline=False)
-        embed.set_image(url=ctx.message.attachments[0].url)
-        embed.set_footer(text="Aguardando aprovação da staff.")
+    @commands.command(name="orbe")
+    async def orbe(self, ctx, cor: str, membros: commands.Greedy[discord.Member]):
+        cor_lower = cor.lower()
+        if cor_lower not in self.cores_orbe:
+            await ctx.send(f"❌ Cor de orbe inválida. Use uma das seguintes: {', '.join(self.cores_orbe.keys())}.")
+            return
 
-        view = OrbApprovalView(self.bot, submission_id=submission_id)
-        await canal_aprovacao.send(embed=embed, view=view)
-        await ctx.send(f"✅ A sua submissão (ID: {submission_id}) foi enviada para o canal de aprovações!")
+        if not ctx.message.attachments:
+            await ctx.send("❌ Você precisa de anexar um print (imagem) da captura da orbe.")
+            return
+
+        imagem = ctx.message.attachments[0]
+        if not imagem.content_type.startswith('image/'):
+            await ctx.send("❌ O anexo precisa de ser uma imagem.")
+            return
+
+        todos_membros = [ctx.author] + membros
+        membros_unicos = sorted(list(set(todos_membros)), key=lambda m: m.id)
+        membros_ids_str = ",".join(str(m.id) for m in membros_unicos)
+        membros_mencoes = "\n".join(f"• {m.mention}" for m in membros_unicos)
+
+        valor_total = int(self.bot.db_manager.get_config_value(f'orbe_{cor_lower}', '0'))
+        if valor_total == 0:
+            await ctx.send(f"⚠️ A recompensa para a orbe {cor} ainda não foi configurada pela administração.")
+            return
+
+        recompensa_individual = valor_total // len(membros_unicos)
+
+        canal_aprovacao_id = int(self.bot.db_manager.get_config_value('canal_aprovacao', '0'))
+        canal_aprovacao = self.bot.get_channel(canal_aprovacao_id)
+
+        if not canal_aprovacao:
+            await ctx.send("⚠️ O canal de aprovações não foi configurado. Contacte um administrador.")
+            return
+
+        embed = discord.Embed(
+            title=f"🔮 Submissão de Orbe {self.cores_orbe[cor_lower]['nome']}",
+            description=f"**Enviado por:** {ctx.author.mention}\n\n"
+                        f"**Membros no Grupo ({len(membros_unicos)}):**\n{membros_mencoes}\n\n"
+                        f"**Valor Total:** {valor_total} moedas\n"
+                        f"**Valor por Membro:** {recompensa_individual} moedas",
+            color=self.cores_orbe[cor_lower]['cor']
+        )
+        embed.set_image(url=imagem.url)
+        embed.set_footer(text="Aguardando aprovação da Staff...")
+
+        view = OrbeAprovacaoView(self.bot)
+        
+        try:
+            msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
+            
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "INSERT INTO submissoes_orbe (message_id, cor, valor_total, autor_id, membros, status) VALUES (%s, %s, %s, %s, %s, %s)",
+                        (msg_aprovacao.id, cor_lower, valor_total, ctx.author.id, membros_ids_str, 'pendente')
+                    )
+                conn.commit()
+
+            await ctx.message.add_reaction("✅")
+            await ctx.send("✅ Submissão enviada para análise!", delete_after=10)
+
+        except Exception as e:
+            await ctx.send("❌ Ocorreu um erro ao enviar a sua submissão. Tente novamente.")
+            print(f"Erro no comando orbe: {e}")
+
 
 async def setup(bot):
     await bot.add_cog(Orbes(bot))

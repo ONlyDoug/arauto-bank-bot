@@ -93,8 +93,8 @@ class TaxaPrataView(discord.ui.View):
                 guild = interaction.guild
                 membro = guild.get_member(user_id)
                 admin_cog = self.bot.get_cog('Admin')
-                cargo_membro_id = int(admin_cog.get_config_value('cargo_membro', '0'))
-                cargo_inadimplente_id = int(admin_cog.get_config_value('cargo_inadimplente', '0'))
+                cargo_membro_id = int(self.bot.db_manager.get_config_value('cargo_membro', '0'))
+                cargo_inadimplente_id = int(self.bot.db_manager.get_config_value('cargo_inadimplente', '0'))
                 
                 cargo_membro = guild.get_role(cargo_membro_id)
                 cargo_inadimplente = guild.get_role(cargo_inadimplente_id)
@@ -127,3 +127,4 @@ class TaxaPrataView(discord.ui.View):
     @discord.ui.button(label="Recusar", style=discord.ButtonStyle.danger, custom_id="recusar_taxa_prata")
     async def recusar_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_interaction(interaction, "recusado")
+
