@@ -22,21 +22,25 @@ intents.message_content = True
 intents.voice_states = True
 intents.reactions = True
 
-# --- CHECK GLOBAL PARA RESTRIÇÃO DE CANAIS ---
+# --- CHECK GLOBAL PARA RESTRIÇÃO DE CANAIS (LÓGICA CORRIGIDA) ---
 async def global_channel_check(ctx):
-    # O comando !setup é uma exceção e pode ser usado em qualquer lugar por um admin
-    if ctx.command and ctx.command.name == 'setup':
-        return True
-    
-    # Admins podem usar qualquer comando em qualquer lugar
+    # 1. Admins podem usar qualquer comando em qualquer lugar. É a regra principal.
     if ctx.author.guild_permissions.administrator:
         return True
     
-    # Para outros usuários, o comando só funciona nas categorias permitidas
+    # 2. O comando !setup é uma exceção e pode ser usado em qualquer lugar (a permissão de admin é verificada no próprio comando).
+    if ctx.command and ctx.command.name == 'setup':
+        return True
+    
+    # 3. Para outros usuários, o comando só funciona nas categorias permitidas.
     if ctx.guild and ctx.channel.category and ctx.channel.category.name in ctx.bot.allowed_categories:
         return True
     
-    # Se nenhuma das condições for atendida, o comando é ignorado silenciosamente
+    # 4. Permite comandos em DMs (mensagens privadas).
+    if not ctx.guild:
+        return True
+        
+    # Se nenhuma das condições for atendida, o comando é bloqueado.
     return False
 
 class ArautoBankBot(commands.Bot):
@@ -87,6 +91,7 @@ class ArautoBankBot(commands.Bot):
         print('------')
 
     async def on_command_error(self, ctx, error):
+        # Ignora erros que são tratados (comandos não encontrados, falhas de permissão)
         if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
             return
         if isinstance(error, commands.MissingRequiredArgument):

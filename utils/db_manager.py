@@ -14,7 +14,6 @@ class DatabaseManager:
 
     async def connect(self):
         try:
-            # psycopg2 não é async, então executamos num executor para não bloquear o loop de eventos
             loop = asyncio.get_event_loop()
             self._pool = await loop.run_in_executor(
                 None, 
@@ -24,7 +23,7 @@ class DatabaseManager:
                 print("Pool de conexões com a base de dados inicializado com sucesso.")
         except Exception as e:
             print(f"ERRO CRÍTICO ao inicializar o pool de conexões: {e}")
-            raise e # Propaga o erro para parar a inicialização do bot se a DB falhar
+            raise e
 
     async def close(self):
         if self._pool:
@@ -45,31 +44,24 @@ class DatabaseManager:
             try:
                 conn = self._pool.getconn()
                 yield conn
-                # Se a operação foi bem-sucedida, sai do loop
                 return
             except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
                 last_exception = e
                 print(f"AVISO: Erro de conexão com a DB (Tentativa {attempt + 1}/{retries}): {e}")
                 
-                # Fecha a conexão quebrada, se houver uma
                 if conn:
                     self._pool.putconn(conn, close=True)
                     conn = None
                 
-                # Pausa antes de tentar novamente
                 time.sleep(1) 
             finally:
-                # Garante que a conexão é devolvida ao pool se não foi fechada
                 if conn:
                     self._pool.putconn(conn)
         
-        # Se todas as tentativas falharem, levanta a última exceção
         print("ERRO: Não foi possível restabelecer a conexão com a base de dados após várias tentativas.")
         raise last_exception
 
-    # --- Funções de Configuração Centralizadas ---
     def get_config_value(self, chave: str, default: str = None):
-        """Busca um valor de configuração da base de dados de forma segura."""
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute("SELECT valor FROM configuracoes WHERE chave = %s", (chave,))
@@ -77,7 +69,6 @@ class DatabaseManager:
         return resultado[0] if resultado else default
 
     def set_config_value(self, chave: str, valor: str):
-        """Define um valor de configuração na base de dados de forma segura."""
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
