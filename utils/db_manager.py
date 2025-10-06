@@ -1,8 +1,6 @@
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
-import contextlib
-import time
 import asyncio
 
 class DatabaseManager:
@@ -11,11 +9,11 @@ class DatabaseManager:
         self._min_conn = min_conn
         self._max_conn = max_conn
         self._pool = None
-        self._loop = asyncio.get_event_loop()
 
     async def connect(self):
         try:
-            self._pool = await self._loop.run_in_executor(
+            loop = asyncio.get_running_loop()
+            self._pool = await loop.run_in_executor(
                 None,
                 lambda: psycopg2.pool.SimpleConnectionPool(self._min_conn, self._max_conn, dsn=self._dsn)
             )
@@ -27,7 +25,8 @@ class DatabaseManager:
 
     async def close(self):
         if self._pool:
-            await self._loop.run_in_executor(None, self._pool.closeall)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._pool.closeall)
             print("Pool de conexões fechado.")
 
     def _execute_sync(self, query, params=None, fetch=None):
@@ -53,11 +52,12 @@ class DatabaseManager:
 
     async def execute_query(self, query, params=None, fetch=None):
         """Executa uma query de forma assíncrona, sem bloquear o loop de eventos."""
+        loop = asyncio.get_running_loop()
         retries = 3
         last_exception = None
         for attempt in range(retries):
             try:
-                return await self._loop.run_in_executor(
+                return await loop.run_in_executor(
                     None,  # Usa o executor de thread padrão
                     self._execute_sync,
                     query,
