@@ -1,54 +1,57 @@
+
 # Copilot Instructions for arauto-bank-bot
 
-## Visão Geral
-Este projeto é um bot de banco para Discord, estruturado em Python, com funcionalidades de economia, engajamento, eventos, loja, orbes, taxas e utilidades. O código está organizado em cogs (módulos de comandos) e utils (utilitários de backend).
+## Visão Geral e Arquitetura
 
-## Estrutura Principal
-- `main.py`: Ponto de entrada do bot. Inicializa o bot, carrega cogs e configurações.
-- `cogs/`: Contém módulos de comandos separados por domínio (ex: `economia.py`, `eventos.py`). Cada arquivo define uma classe Cog do discord.py.
-- `utils/`: Funções utilitárias e helpers, como acesso a banco de dados (`db_manager.py`), permissões e views customizadas.
+Este projeto é um bot de economia bancária para Discord, escrito em Python, estruturado de forma modular para facilitar manutenção e extensão. O bot utiliza `discord.py` e organiza comandos em cogs por domínio de negócio, com utilitários centralizados para lógica compartilhada e persistência.
 
-## Padrões e Convenções
-- Cada cog implementa comandos relacionados ao seu domínio e utiliza helpers de `utils/` para lógica compartilhada.
-- O acesso ao banco de dados é centralizado em `utils/db_manager.py`.
-- Permissões customizadas são implementadas em `utils/permissions.py`.
-- Views interativas (ex: menus, botões) ficam em `utils/views.py`.
-- Use sempre funções utilitárias para lógica repetida entre cogs.
+### Componentes Principais
+- **`main.py`**: Ponto de entrada. Inicializa o bot, define intenções, carrega cogs, conecta ao banco e registra views persistentes. Implementa um check global para restringir comandos a categorias específicas do Discord.
+- **`cogs/`**: Cada arquivo representa um domínio funcional (ex: `economia.py`, `eventos.py`). Cada cog é uma subclasse de `commands.Cog` e deve ser registrada em `main.py`.
+- **`utils/`**: Funções utilitárias e helpers:
+  - `db_manager.py`: Centraliza acesso ao banco de dados (ex: PostgreSQL via `psycopg2-binary`).
+  - `permissions.py`: Permissões customizadas para comandos.
+  - `views.py`: Views interativas persistentes (menus, botões, etc).
 
-## Fluxo de Dados
-- Comandos de usuário (via Discord) são roteados para cogs.
-- Cogs interagem com utilitários para persistência, validação e lógica de negócio.
+## Fluxo de Dados e Integração
+- Usuários interagem via comandos no Discord, roteados para cogs.
+- Cogs utilizam funções de `utils/` para lógica de negócio, persistência e validação.
 - Respostas e interações são enviadas de volta ao Discord.
+- O banco de dados é acessado exclusivamente via `DatabaseManager` (em `utils/db_manager.py`).
+
+## Convenções e Padrões Específicos
+- **Cogs**: Cada cog implementa comandos de um domínio e importa helpers de `utils/` para lógica comum.
+- **Banco de Dados**: Nunca acesse o banco diretamente nos cogs; use sempre métodos do `DatabaseManager`.
+- **Views**: Views persistentes devem ser registradas em `main.py` usando `self.add_view`.
+- **Permissões**: Use checks customizados de `utils/permissions.py` para regras de acesso.
+- **Categorias Permitidas**: O check global em `main.py` restringe comandos a categorias específicas (ver `self.allowed_categories`).
 
 ## Workflows de Desenvolvimento
-- Instale dependências com: `pip install -r requirements.txt`
-- Execute o bot localmente: `python main.py`
+- Instale dependências: `pip install -r requirements.txt`
+- Execute localmente: `python main.py`
+- Variáveis de ambiente (ex: `DISCORD_TOKEN`, `DATABASE_URL`) devem estar em um arquivo `.env` (não versionado).
+- Para adicionar comandos: crie um novo arquivo em `cogs/`, implemente uma classe Cog e registre em `main.py`.
 - Não há testes automatizados definidos por padrão.
-- Para adicionar comandos, crie um novo arquivo em `cogs/` e registre a classe Cog em `main.py`.
 
-## Integrações e Dependências
-- Baseado em `discord.py` (ou fork compatível).
-- Banco de dados: verifique `db_manager.py` para detalhes de integração (ex: SQLite, PostgreSQL, etc).
-- Outras dependências estão listadas em `requirements.txt`.
-
-## Exemplos de Padrões
-- Para adicionar um comando:
+## Exemplos de Uso e Padrão
+- **Novo comando em um cog**:
   ```python
   from discord.ext import commands
 
-  class MinhaCog(commands.Cog):
+  class Economia(commands.Cog):
       @commands.command()
-      async def meucomando(self, ctx):
-          # lógica aqui
-          pass
+      async def saldo(self, ctx):
+          from utils.db_manager import get_user_balance
+          saldo = await get_user_balance(ctx.author.id)
+          await ctx.send(f'Seu saldo: {saldo}')
   ```
-- Para acessar o banco:
+- **Acesso ao banco**:
   ```python
   from utils.db_manager import get_user_balance
-  saldo = get_user_balance(user_id)
+  saldo = await get_user_balance(user_id)
   ```
 
-## Observações
-- Siga a estrutura modular para facilitar manutenção.
-- Centralize lógica compartilhada em `utils/`.
+## Observações Importantes
+- Siga a estrutura modular e centralize lógica repetida em `utils/`.
 - Consulte cogs existentes para exemplos de implementação.
+- O bot depende de variáveis de ambiente e banco de dados externo; garanta que estejam configurados antes de rodar.
