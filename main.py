@@ -22,13 +22,13 @@ intents.message_content = True
 intents.voice_states = True
 intents.reactions = True
 
-# --- CHECK GLOBAL PARA RESTRIÇÃO DE CANAIS (LÓGICA CORRIGIDA) ---
+# --- CHECK GLOBAL PARA RESTRIÇÃO DE CANAIS (LÓGICA FINAL) ---
 async def global_channel_check(ctx):
     # Admins podem usar qualquer comando em qualquer lugar.
     if ctx.author.guild_permissions.administrator:
         return True
     
-    # O comando !setup é uma exceção.
+    # O comando !setup é uma exceção para admins.
     if ctx.command and ctx.command.name == 'setup':
         return True
     
@@ -38,6 +38,10 @@ async def global_channel_check(ctx):
         
     # Bloqueia silenciosamente noutros canais de texto do servidor.
     if ctx.guild:
+        # Apenas envia mensagem de erro se o comando for encontrado
+        if ctx.command is not None:
+             await ctx.message.delete()
+             await ctx.send(f"❌ {ctx.author.mention}, este comando só pode ser usado nos canais do **Arauto Bank**.", delete_after=10)
         return False
 
     # Permite comandos em DMs (mensagens privadas).
@@ -96,9 +100,11 @@ class ArautoBankBot(commands.Bot):
         if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
             return
         if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"❌ Faltam argumentos. Use `!help {ctx.command.name}` para ver como usar o comando.", delete_after=10)
+            await ctx.send(f"❌ Faltam argumentos para o comando `{ctx.command.name}`. Verifique a ajuda se necessário.", delete_after=10)
         else:
             print(f"Erro num comando: {ctx.command}: {error}")
+            # await ctx.send("Ocorreu um erro inesperado ao executar este comando.", delete_after=10)
+
 
 # --- Iniciar o Bot ---
 if __name__ == "__main__":

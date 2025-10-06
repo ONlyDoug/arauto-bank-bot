@@ -61,19 +61,24 @@ class DatabaseManager:
         print("ERRO: Não foi possível restabelecer a conexão com a base de dados após várias tentativas.")
         raise last_exception
 
-    def get_config_value(self, chave: str, default: str = None):
+    def execute_query(self, query, params=None, fetch=None):
+        """Executa uma query com a lógica de reconexão."""
         with self.get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute("SELECT valor FROM configuracoes WHERE chave = %s", (chave,))
-                resultado = cursor.fetchone()
+                cursor.execute(query, params)
+                if fetch == "one":
+                    return cursor.fetchone()
+                if fetch == "all":
+                    return cursor.fetchall()
+            conn.commit()
+
+    def get_config_value(self, chave: str, default: str = None):
+        resultado = self.execute_query("SELECT valor FROM configuracoes WHERE chave = %s", (chave,), fetch="one")
         return resultado[0] if resultado else default
 
     def set_config_value(self, chave: str, valor: str):
-        with self.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor",
-                    (chave, valor)
-                )
-            conn.commit()
+        self.execute_query(
+            "INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor",
+            (chave, valor)
+        )
 

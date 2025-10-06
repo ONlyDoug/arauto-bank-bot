@@ -18,14 +18,11 @@ class Engajamento(commands.Cog):
         
     async def registrar_renda_passiva(self, user_id, tipo, valor):
         data_hoje = datetime.utcnow().date()
-        with self.bot.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "INSERT INTO renda_passiva_log (user_id, tipo, data, valor) VALUES (%s, %s, %s, %s) "
-                    "ON CONFLICT (user_id, tipo, data) DO UPDATE SET valor = renda_passiva_log.valor + EXCLUDED.valor",
-                    (user_id, tipo, data_hoje, valor)
-                )
-            conn.commit()
+        self.bot.db_manager.execute_query(
+            "INSERT INTO renda_passiva_log (user_id, tipo, data, valor) VALUES (%s, %s, %s, %s) "
+            "ON CONFLICT (user_id, tipo, data) DO UPDATE SET valor = renda_passiva_log.valor + EXCLUDED.valor",
+            (user_id, tipo, data_hoje, valor)
+        )
 
     async def get_total_renda_passiva_diaria(self, user_id, tipo):
         data_hoje = datetime.utcnow().date()
@@ -53,7 +50,6 @@ class Engajamento(commands.Cog):
                         if member.bot or member.voice.self_deaf or member.voice.self_mute:
                             continue
 
-                        # O log agora armazena o valor em moedas, não minutos
                         total_ganho_hoje = await self.get_total_renda_passiva_diaria(member.id, 'voz')
                         limite_diario_moedas = (limite_voz_minutos / 5) * recompensa_voz
 
@@ -158,7 +154,6 @@ class Engajamento(commands.Cog):
     async def before_enviar_mensagem_engajamento(self):
         await self.bot.wait_until_ready()
         print("Tarefa de mensagens de engajamento iniciada.")
-        # Adiciona um atraso aleatório inicial para não postar sempre no mesmo horário
         await asyncio.sleep(random.randint(60, 300))
 
 async def setup(bot):

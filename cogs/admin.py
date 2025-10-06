@@ -27,6 +27,7 @@ class Admin(commands.Cog):
                     cursor.execute("CREATE TABLE IF NOT EXISTS loja (id INTEGER PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
                     cursor.execute("CREATE TABLE IF NOT EXISTS renda_passiva_log (user_id BIGINT, tipo TEXT, data DATE, valor INTEGER, PRIMARY KEY (user_id, tipo, data))")
                     cursor.execute("CREATE TABLE IF NOT EXISTS submissoes_taxa (message_id BIGINT PRIMARY KEY, user_id BIGINT, status TEXT, url_imagem TEXT)")
+                    cursor.execute("CREATE TABLE IF NOT EXISTS eventos_criados_log (criador_id BIGINT, data DATE, quantidade INTEGER, PRIMARY KEY (criador_id, data))")
                     
                     default_configs = {
                         'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
@@ -36,7 +37,9 @@ class Admin(commands.Cog):
                         'canal_resgates': '0', 'canal_batepapo': '0',
                         'recompensa_voz': '1', 'limite_voz': '120',
                         'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60',
-                        'recompensa_reacao': '50'
+                        'recompensa_reacao': '50',
+                        'recompensa_evento_bronze': '50', 'recompensa_evento_prata': '100', 'recompensa_evento_ouro': '200',
+                        'limite_puxador_diario': '5'
                     }
                     for chave, valor in default_configs.items():
                         cursor.execute("INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO NOTHING", (chave, valor))
@@ -57,11 +60,9 @@ class Admin(commands.Cog):
         
     async def create_and_pin(self, ctx, *, category, name, embed, overwrites=None, set_config_key=None):
         try:
-            # Garante que overwrites é um dicionário, mesmo que seja vazio
             channel_overwrites = overwrites if overwrites is not None else {}
-
             channel = await category.create_text_channel(name, overwrites=channel_overwrites)
-            await asyncio.sleep(1.5) # Mantém a pausa para evitar rate limit
+            await asyncio.sleep(1.5)
             msg = await channel.send(embed=embed)
             await msg.pin()
             
@@ -134,7 +135,7 @@ class Admin(commands.Cog):
         await self.create_and_pin(ctx, category=cat_bank, name="🛍️｜loja-da-guilda", embed=embed)
         
         embed = discord.Embed(title="🏆｜Eventos e Missões", description="A principal forma de ganhar moedas! Participar nos conteúdos da guilda é a sua maior fonte de renda.", color=0xe91e63)
-        embed.add_field(name="Como Participar", value="1. Use `!listareventos` para ver as missões ativas.\n2. Inscreva-se com `!participar <ID_do_evento>`.\n3. Participe no evento e garanta que o líder confirma a sua presença!", inline=False)
+        embed.add_field(name="Como Participar", value="**Para Puxadores:**\n`!puxar <tier> <nome>` (tier: bronze, prata, ouro)\n`!criarevento <recompensa> <meta> <nome>`\n`!confirmar <ID> <@membros...>`\n`!finalizarevento <ID>`\n\n**Para Membros:**\n`!listareventos`\n`!participar <ID>`", inline=False)
         await self.create_and_pin(ctx, category=cat_bank, name="🏆｜eventos-e-missões", embed=embed)
 
         embed = discord.Embed(title="🔮｜Submeter Orbes", description="Apanhou uma orbe? Registe-a aqui para ganhar uma recompensa para si e para o seu grupo!", color=0x9b59b6)

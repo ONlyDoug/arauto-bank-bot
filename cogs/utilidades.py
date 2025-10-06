@@ -7,7 +7,6 @@ import asyncio
 class Utilidades(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.db_manager = self.bot.db_manager
         self.ID_TESOURO_GUILDA = 1
 
     @commands.command(name="status")
@@ -19,8 +18,8 @@ class Utilidades(commands.Cog):
     @commands.command(name="info-moeda", aliases=["infomoeda"])
     async def info_moeda(self, ctx):
         """Mostra as estatísticas vitais da economia da guilda."""
-        total_prata = int(self.db_manager.get_config_value('lastro_total_prata', '0'))
-        taxa_conversao = int(self.db_manager.get_config_value('taxa_conversao_prata', '1000'))
+        total_prata = int(self.bot.db_manager.get_config_value('lastro_total_prata', '0'))
+        taxa_conversao = int(self.bot.db_manager.get_config_value('taxa_conversao_prata', '1000'))
         
         suprimento_maximo = total_prata // taxa_conversao if taxa_conversao > 0 else 0
         
@@ -31,7 +30,7 @@ class Utilidades(commands.Cog):
 
         embed = discord.Embed(
             title="📈 Estatísticas do Arauto Bank",
-            color=discord.Color.from_rgb(230, 230, 250) # Lilás claro
+            color=discord.Color.from_rgb(230, 230, 250)
         )
         embed.add_field(name="Lastro Total de Prata", value=f"**{total_prata:,}** 🥈", inline=False)
         embed.add_field(name="Taxa de Conversão", value=f"1 🪙 = **{taxa_conversao:,}** 🥈", inline=False)
@@ -55,21 +54,19 @@ class Utilidades(commands.Cog):
 
         user_id = ctx.author.id
         
-        with self.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                # Busca transações normais
-                cursor.execute(
-                    "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND DATE(data AT TIME ZONE 'UTC') = %s ORDER BY data DESC",
-                    (user_id, data_alvo)
-                )
-                transacoes = cursor.fetchall()
-                
-                # Busca o total de renda passiva para o dia
-                cursor.execute(
-                    "SELECT tipo, SUM(valor) FROM renda_passiva_log WHERE user_id = %s AND data = %s GROUP BY tipo",
-                    (user_id, data_alvo)
-                )
-                renda_passiva = cursor.fetchall()
+        # Busca transações normais
+        transacoes = self.bot.db_manager.execute_query(
+            "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND DATE(data AT TIME ZONE 'UTC') = %s ORDER BY data DESC",
+            (user_id, data_alvo),
+            fetch="all"
+        )
+        
+        # Busca o total de renda passiva para o dia
+        renda_passiva = self.bot.db_manager.execute_query(
+            "SELECT tipo, SUM(valor) FROM renda_passiva_log WHERE user_id = %s AND data = %s GROUP BY tipo",
+            (user_id, data_alvo),
+            fetch="all"
+        )
 
         embed = discord.Embed(
             title=f"📜 Extrato de {ctx.author.display_name}",
@@ -94,10 +91,9 @@ class Utilidades(commands.Cog):
         # Adiciona as outras transações
         if transacoes:
             texto_transacoes = ""
-            # Filtra as transações de renda passiva para não as duplicar
             transacoes_principais = [t for t in transacoes if t[2] not in ["Renda passiva por atividade em voz", "Renda passiva por atividade no chat"] and not t[2].startswith("Recompensa por reagir")]
             
-            for tipo, valor, descricao, data in transacoes_principais[:10]: # Limita a 10 transações
+            for tipo, valor, descricao, data in transacoes_principais[:10]:
                 emoji = "📥" if tipo == 'deposito' else "📤"
                 sinal = "+" if tipo == 'deposito' else "-"
                 texto_transacoes += f"{emoji} `{data.strftime('%H:%M')}`: **{sinal}{valor}** moedas ({descricao})\n"
@@ -121,11 +117,11 @@ class Utilidades(commands.Cog):
         try:
             await economia_cog.levantar(membro.id, valor, f"Resgate de moedas por {ctx.author.name}")
 
-            canal_resgates_id = int(self.db_manager.get_config_value('canal_resgates', '0'))
+            canal_resgates_id = int(self.bot.db_manager.get_config_value('canal_resgates', '0'))
             if canal_resgates_id != 0:
                 canal = self.bot.get_channel(canal_resgates_id)
                 if canal:
-                    taxa_conversao = int(self.db_manager.get_config_value('taxa_conversao_prata', '1000'))
+                    taxa_conversao = int(self.bot.db_manager.get_config_value('taxa_conversao_prata', '1000'))
                     valor_prata = valor * taxa_conversao
                     
                     embed = discord.Embed(
