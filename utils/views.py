@@ -14,24 +14,27 @@ class OrbeAprovacaoView(discord.ui.View):
         db_manager = self.bot.db_manager
         
         try:
-            with db_manager.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute("SELECT autor_id, membros, valor_total FROM submissoes_orbe WHERE message_id = %s", (interaction.message.id,))
-                    submissao = cursor.fetchone()
-                    if not submissao:
-                        return await interaction.response.send_message("Submissão não encontrada na base de dados.", ephemeral=True)
+            submissao = await db_manager.execute_query(
+                "SELECT autor_id, membros, valor_total FROM submissoes_orbe WHERE message_id = %s",
+                (interaction.message.id,),
+                fetch="one"
+            )
+            if not submissao:
+                return await interaction.response.send_message("Submissão não encontrada na base de dados.", ephemeral=True)
 
-                    autor_id, membros_str, valor_total = submissao
-                    membros_ids = [int(id_str) for id_str in membros_str.split(',')]
-                    
-                    if novo_status == "aprovado":
-                        recompensa_individual = valor_total // len(membros_ids)
-                        economia_cog = self.bot.get_cog('Economia')
-                        for user_id in membros_ids:
-                            await economia_cog.depositar(user_id, recompensa_individual, f"Recompensa de Orbe aprovada por {interaction.user.name}")
-                    
-                    cursor.execute("UPDATE submissoes_orbe SET status = %s WHERE message_id = %s", (novo_status, interaction.message.id))
-                conn.commit()
+            autor_id, membros_str, valor_total = submissao
+            membros_ids = [int(id_str) for id_str in membros_str.split(',')]
+            
+            if novo_status == "aprovado":
+                recompensa_individual = valor_total // len(membros_ids)
+                economia_cog = self.bot.get_cog('Economia')
+                for user_id in membros_ids:
+                    await economia_cog.depositar(user_id, recompensa_individual, f"Recompensa de Orbe aprovada por {interaction.user.name}")
+            
+            await db_manager.execute_query(
+                "UPDATE submissoes_orbe SET status = %s WHERE message_id = %s",
+                (novo_status, interaction.message.id)
+            )
 
             embed = interaction.message.embeds[0]
             if novo_status == "aprovado":
@@ -73,23 +76,26 @@ class TaxaPrataView(discord.ui.View):
         db_manager = self.bot.db_manager
         
         try:
-            with db_manager.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute("SELECT user_id FROM submissoes_taxa WHERE message_id = %s", (interaction.message.id,))
-                    submissao = cursor.fetchone()
-                    if not submissao:
-                        return await interaction.response.send_message("Submissão não encontrada.", ephemeral=True)
+            submissao = await db_manager.execute_query(
+                "SELECT user_id FROM submissoes_taxa WHERE message_id = %s",
+                (interaction.message.id,),
+                fetch="one"
+            )
+            if not submissao:
+                return await interaction.response.send_message("Submissão não encontrada.", ephemeral=True)
 
-                    user_id = submissao[0]
-                    membro = interaction.guild.get_member(user_id)
-                    
-                    if novo_status == "aprovado" and membro:
-                        taxas_cog = self.bot.get_cog('Taxas')
-                        await taxas_cog.regularizar_membro(membro)
-                        cursor.execute("UPDATE taxas SET status = 'pago_prata' WHERE user_id = %s", (user_id,))
+            user_id = submissao[0]
+            membro = interaction.guild.get_member(user_id)
+            
+            if novo_status == "aprovado" and membro:
+                taxas_cog = self.bot.get_cog('Taxas')
+                await taxas_cog.regularizar_membro(membro)
+                await db_manager.execute_query("UPDATE taxas SET status = 'pago_prata' WHERE user_id = %s", (user_id,))
 
-                    cursor.execute("UPDATE submissoes_taxa SET status = %s WHERE message_id = %s", (novo_status, interaction.message.id))
-                conn.commit()
+            await db_manager.execute_query(
+                "UPDATE submissoes_taxa SET status = %s WHERE message_id = %s",
+                (novo_status, interaction.message.id)
+            )
 
             embed = interaction.message.embeds[0]
             if novo_status == "aprovado":
@@ -117,4 +123,3 @@ class TaxaPrataView(discord.ui.View):
     @discord.ui.button(label="Recusar", style=discord.ButtonStyle.danger, custom_id="recusar_taxa_prata")
     async def recusar_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_interaction(interaction, "recusado")
-

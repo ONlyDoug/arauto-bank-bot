@@ -18,8 +18,10 @@ class Utilidades(commands.Cog):
     @commands.command(name="info-moeda", aliases=["infomoeda"])
     async def info_moeda(self, ctx):
         """Mostra as estatísticas vitais da economia da guilda."""
-        total_prata = int(self.bot.db_manager.get_config_value('lastro_total_prata', '0'))
-        taxa_conversao = int(self.bot.db_manager.get_config_value('taxa_conversao_prata', '1000'))
+        total_prata_str = await self.bot.db_manager.get_config_value('lastro_total_prata', '0')
+        taxa_conversao_str = await self.bot.db_manager.get_config_value('taxa_conversao_prata', '1000')
+        total_prata = int(total_prata_str)
+        taxa_conversao = int(taxa_conversao_str)
         
         suprimento_maximo = total_prata // taxa_conversao if taxa_conversao > 0 else 0
         
@@ -54,15 +56,13 @@ class Utilidades(commands.Cog):
 
         user_id = ctx.author.id
         
-        # Busca transações normais
-        transacoes = self.bot.db_manager.execute_query(
+        transacoes = await self.bot.db_manager.execute_query(
             "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND DATE(data AT TIME ZONE 'UTC') = %s ORDER BY data DESC",
             (user_id, data_alvo),
             fetch="all"
         )
         
-        # Busca o total de renda passiva para o dia
-        renda_passiva = self.bot.db_manager.execute_query(
+        renda_passiva = await self.bot.db_manager.execute_query(
             "SELECT tipo, SUM(valor) FROM renda_passiva_log WHERE user_id = %s AND data = %s GROUP BY tipo",
             (user_id, data_alvo),
             fetch="all"
@@ -75,7 +75,6 @@ class Utilidades(commands.Cog):
         )
         embed.set_thumbnail(url=ctx.author.display_avatar.url)
 
-        # Adiciona o resumo de Renda Passiva
         if renda_passiva:
             renda_texto = ""
             for tipo, total in renda_passiva:
@@ -88,7 +87,6 @@ class Utilidades(commands.Cog):
             if renda_texto:
                 embed.add_field(name="Resumo de Atividade Passiva", value=renda_texto, inline=False)
 
-        # Adiciona as outras transações
         if transacoes:
             texto_transacoes = ""
             transacoes_principais = [t for t in transacoes if t[2] not in ["Renda passiva por atividade em voz", "Renda passiva por atividade no chat"] and not t[2].startswith("Recompensa por reagir")]
@@ -117,11 +115,11 @@ class Utilidades(commands.Cog):
         try:
             await economia_cog.levantar(membro.id, valor, f"Resgate de moedas por {ctx.author.name}")
 
-            canal_resgates_id = int(self.bot.db_manager.get_config_value('canal_resgates', '0'))
+            canal_resgates_id = int(await self.bot.db_manager.get_config_value('canal_resgates', '0'))
             if canal_resgates_id != 0:
                 canal = self.bot.get_channel(canal_resgates_id)
                 if canal:
-                    taxa_conversao = int(self.bot.db_manager.get_config_value('taxa_conversao_prata', '1000'))
+                    taxa_conversao = int(await self.bot.db_manager.get_config_value('taxa_conversao_prata', '1000'))
                     valor_prata = valor * taxa_conversao
                     
                     embed = discord.Embed(
@@ -138,7 +136,6 @@ class Utilidades(commands.Cog):
             await ctx.send(f"✅ Resgate de **{valor}** moedas para {membro.mention} processado com sucesso. A notificação foi enviada à equipa financeira.")
         except ValueError as e:
              await ctx.send(f"❌ Erro: {e}")
-
 
     @commands.command(name="airdrop")
     @check_permission_level(3)
@@ -157,11 +154,9 @@ class Utilidades(commands.Cog):
 
         for membro in membros_alvo:
             await economia_cog.depositar(membro.id, valor, "Airdrop da Administração")
-            await asyncio.sleep(0.1) # Pequena pausa para não sobrecarregar
+            await asyncio.sleep(0.1) 
 
         await msg_espera.edit(content=f"✅ Airdrop concluído com sucesso para **{len(membros_alvo)}** membros!")
 
-
 async def setup(bot):
     await bot.add_cog(Utilidades(bot))
-

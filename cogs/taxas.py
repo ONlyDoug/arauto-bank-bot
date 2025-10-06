@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands, tasks
 from utils.permissions import check_permission_level
 from datetime import datetime, timedelta
-from utils.views import TaxaPrataView # Importa a View do novo ficheiro
+from utils.views import TaxaPrataView
 
 class Taxas(commands.Cog):
     def __init__(self, bot):
@@ -15,8 +15,8 @@ class Taxas(commands.Cog):
 
     async def regularizar_membro(self, membro):
         """Função auxiliar para remover o cargo de inadimplente e adicionar o de membro."""
-        cargo_inadimplente_id = int(self.bot.db_manager.get_config_value('cargo_inadimplente', '0'))
-        cargo_membro_id = int(self.bot.db_manager.get_config_value('cargo_membro', '0'))
+        cargo_inadimplente_id = int(await self.bot.db_manager.get_config_value('cargo_inadimplente', '0'))
+        cargo_membro_id = int(await self.bot.db_manager.get_config_value('cargo_membro', '0'))
 
         if not cargo_inadimplente_id or not cargo_membro_id:
             return
@@ -31,7 +31,7 @@ class Taxas(commands.Cog):
 
     @tasks.loop(hours=24)
     async def cobrar_taxa(self):
-        # A lógica da tarefa de cobrança...
+        # A lógica da tarefa de cobrança... (A SER IMPLEMENTADA)
         pass
 
     @cobrar_taxa.before_loop
@@ -40,7 +40,7 @@ class Taxas(commands.Cog):
 
     @commands.command(name="pagar-taxa")
     async def pagar_taxa(self, ctx):
-        valor_taxa = int(self.bot.db_manager.get_config_value('taxa_semanal_valor', '0'))
+        valor_taxa = int(await self.bot.db_manager.get_config_value('taxa_semanal_valor', '0'))
         if valor_taxa == 0:
             return await ctx.send("O sistema de taxas não está configurado.")
 
@@ -61,7 +61,7 @@ class Taxas(commands.Cog):
         if not imagem.content_type.startswith('image/'):
             return await ctx.send("❌ O anexo precisa de ser uma imagem.", delete_after=15)
 
-        canal_aprovacao_id = int(self.bot.db_manager.get_config_value('canal_aprovacao', '0'))
+        canal_aprovacao_id = int(await self.bot.db_manager.get_config_value('canal_aprovacao', '0'))
         canal_aprovacao = self.bot.get_channel(canal_aprovacao_id)
 
         if not canal_aprovacao:
@@ -81,13 +81,10 @@ class Taxas(commands.Cog):
         try:
             msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
             
-            with self.bot.db_manager.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        "INSERT INTO submissoes_taxa (message_id, user_id, status, url_imagem) VALUES (%s, %s, %s, %s) ON CONFLICT (message_id) DO UPDATE SET user_id = EXCLUDED.user_id, status = EXCLUDED.status, url_imagem = EXCLUDED.url_imagem",
-                        (msg_aprovacao.id, ctx.author.id, 'pendente', imagem.url)
-                    )
-                conn.commit()
+            await self.bot.db_manager.execute_query(
+                "INSERT INTO submissoes_taxa (message_id, user_id, status, url_imagem) VALUES (%s, %s, %s, %s) ON CONFLICT (message_id) DO UPDATE SET user_id = EXCLUDED.user_id, status = EXCLUDED.status, url_imagem = EXCLUDED.url_imagem",
+                (msg_aprovacao.id, ctx.author.id, 'pendente', imagem.url)
+            )
 
             await ctx.message.add_reaction("✅")
             await ctx.send("✅ Comprovativo enviado para análise! A sua situação será regularizada assim que um staff aprovar.", delete_after=15)
@@ -96,15 +93,13 @@ class Taxas(commands.Cog):
             await ctx.send("❌ Ocorreu um erro ao enviar o seu comprovativo.")
             print(f"Erro no comando paguei-prata: {e}")
 
-    # Comandos de configuração (definir-taxa, etc.)
     @commands.command(name="definir-taxa")
     @check_permission_level(4)
     async def definir_taxa(self, ctx, valor: int):
         if valor < 0:
             return await ctx.send("O valor da taxa não pode ser negativo.")
-        self.bot.db_manager.set_config_value('taxa_semanal_valor', str(valor))
+        await self.bot.db_manager.set_config_value('taxa_semanal_valor', str(valor))
         await ctx.send(f"✅ Valor da taxa semanal definido para **{valor}** moedas.")
 
 async def setup(bot):
     await bot.add_cog(Taxas(bot))
-

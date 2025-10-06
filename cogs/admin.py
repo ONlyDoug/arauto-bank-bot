@@ -10,42 +10,40 @@ class Admin(commands.Cog):
 
     async def initialize_database_schema(self):
         try:
-            with self.bot.db_manager.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    # Estrutura de tabelas
-                    cursor.execute("CREATE TABLE IF NOT EXISTS banco (user_id BIGINT PRIMARY KEY, saldo BIGINT NOT NULL DEFAULT 0)")
-                    cursor.execute("""CREATE TABLE IF NOT EXISTS transacoes (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL,
-                        valor BIGINT NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)""")
-                    cursor.execute("""CREATE TABLE IF NOT EXISTS eventos (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, recompensa INTEGER NOT NULL,
-                        meta_participacao INTEGER NOT NULL DEFAULT 1, ativo BOOLEAN DEFAULT TRUE, criador_id BIGINT NOT NULL, message_id BIGINT)""")
-                    cursor.execute("""CREATE TABLE IF NOT EXISTS participantes (evento_id INTEGER REFERENCES eventos(id) ON DELETE CASCADE,
-                        user_id BIGINT, progresso INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (evento_id, user_id))""")
-                    cursor.execute("CREATE TABLE IF NOT EXISTS configuracoes (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)")
-                    cursor.execute("""CREATE TABLE IF NOT EXISTS taxas (user_id BIGINT PRIMARY KEY, data_vencimento DATE, status TEXT DEFAULT 'pago')""")
-                    cursor.execute("""CREATE TABLE IF NOT EXISTS submissoes_orbe (id SERIAL PRIMARY KEY, message_id BIGINT, cor TEXT NOT NULL, 
-                        valor_total INTEGER NOT NULL, autor_id BIGINT, membros TEXT, status TEXT DEFAULT 'pendente')""")
-                    cursor.execute("CREATE TABLE IF NOT EXISTS loja (id INTEGER PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
-                    cursor.execute("CREATE TABLE IF NOT EXISTS renda_passiva_log (user_id BIGINT, tipo TEXT, data DATE, valor INTEGER, PRIMARY KEY (user_id, tipo, data))")
-                    cursor.execute("CREATE TABLE IF NOT EXISTS submissoes_taxa (message_id BIGINT PRIMARY KEY, user_id BIGINT, status TEXT, url_imagem TEXT)")
-                    cursor.execute("CREATE TABLE IF NOT EXISTS eventos_criados_log (criador_id BIGINT, data DATE, quantidade INTEGER, PRIMARY KEY (criador_id, data))")
-                    
-                    default_configs = {
-                        'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
-                        'taxa_semanal_valor': '500', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
-                        'perm_nivel_1': '0', 'perm_nivel_2': '0', 'perm_nivel_3': '0', 'perm_nivel_4': '0',
-                        'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
-                        'canal_resgates': '0', 'canal_batepapo': '0',
-                        'recompensa_voz': '1', 'limite_voz': '120',
-                        'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60',
-                        'recompensa_reacao': '50',
-                        'recompensa_evento_bronze': '50', 'recompensa_evento_prata': '100', 'recompensa_evento_ouro': '200',
-                        'limite_puxador_diario': '5'
-                    }
-                    for chave, valor in default_configs.items():
-                        cursor.execute("INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO NOTHING", (chave, valor))
-                    
-                    cursor.execute("INSERT INTO banco (user_id, saldo) VALUES (%s, 0) ON CONFLICT (user_id) DO NOTHING", (1,))
-                conn.commit()
+            # Estrutura de tabelas
+            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS banco (user_id BIGINT PRIMARY KEY, saldo BIGINT NOT NULL DEFAULT 0)")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS transacoes (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL,
+                valor BIGINT NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)""")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS eventos (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, recompensa INTEGER NOT NULL,
+                meta_participacao INTEGER NOT NULL DEFAULT 1, ativo BOOLEAN DEFAULT TRUE, criador_id BIGINT NOT NULL, message_id BIGINT)""")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS participantes (evento_id INTEGER REFERENCES eventos(id) ON DELETE CASCADE,
+                user_id BIGINT, progresso INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (evento_id, user_id))""")
+            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS configuracoes (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS taxas (user_id BIGINT PRIMARY KEY, data_vencimento DATE, status TEXT DEFAULT 'pago')""")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS submissoes_orbe (id SERIAL PRIMARY KEY, message_id BIGINT, cor TEXT NOT NULL, 
+                valor_total INTEGER NOT NULL, autor_id BIGINT, membros TEXT, status TEXT DEFAULT 'pendente')""")
+            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS loja (id INTEGER PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
+            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS renda_passiva_log (user_id BIGINT, tipo TEXT, data DATE, valor INTEGER, PRIMARY KEY (user_id, tipo, data))")
+            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS submissoes_taxa (message_id BIGINT PRIMARY KEY, user_id BIGINT, status TEXT, url_imagem TEXT)")
+            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS eventos_criados_log (criador_id BIGINT, data DATE, quantidade INTEGER, PRIMARY KEY (criador_id, data))")
+            
+            default_configs = {
+                'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
+                'taxa_semanal_valor': '500', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
+                'perm_nivel_1': '0', 'perm_nivel_2': '0', 'perm_nivel_3': '0', 'perm_nivel_4': '0',
+                'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
+                'canal_resgates': '0', 'canal_batepapo': '0',
+                'recompensa_voz': '1', 'limite_voz': '120',
+                'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60',
+                'recompensa_reacao': '50',
+                'recompensa_evento_bronze': '50', 'recompensa_evento_prata': '100', 'recompensa_evento_ouro': '200',
+                'limite_puxador_diario': '5'
+            }
+            for chave, valor in default_configs.items():
+                await self.bot.db_manager.execute_query("INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO NOTHING", (chave, valor))
+            
+            await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES (%s, 0) ON CONFLICT (user_id) DO NOTHING", (1,))
+            
             print("Base de dados Supabase verificada e pronta.")
         except Exception as e:
             print(f"❌ Ocorreu um erro ao inicializar a base de dados: {e}")
@@ -67,7 +65,7 @@ class Admin(commands.Cog):
             await msg.pin()
             
             if set_config_key and channel:
-                self.bot.db_manager.set_config_value(set_config_key, str(channel.id))
+                await self.bot.db_manager.set_config_value(set_config_key, str(channel.id))
                 
             return channel
         except discord.Forbidden as e:
@@ -103,7 +101,7 @@ class Admin(commands.Cog):
         
         await msg_progresso.edit(content="🔥 Estrutura antiga removida. A criar a nova...")
 
-        perm_nivel_4_id = int(self.bot.db_manager.get_config_value('perm_nivel_4', '0'))
+        perm_nivel_4_id = int(await self.bot.db_manager.get_config_value('perm_nivel_4', '0'))
         perm_nivel_4_role = guild.get_role(perm_nivel_4_id)
         admin_overwrites = { 
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -176,7 +174,7 @@ class Admin(commands.Cog):
     async def definir_lastro(self, ctx, valor: int):
         if valor < 0:
             return await ctx.send("❌ O valor do lastro não pode ser negativo.")
-        self.bot.db_manager.set_config_value('lastro_total_prata', str(valor))
+        await self.bot.db_manager.set_config_value('lastro_total_prata', str(valor))
         await ctx.send(f"✅ Lastro total de prata definido para **{valor:,}** 🥈.")
 
     @commands.command(name='definir-taxa-conversao')
@@ -184,7 +182,7 @@ class Admin(commands.Cog):
     async def definir_taxa_conversao(self, ctx, valor: int):
         if valor <= 0:
             return await ctx.send("❌ O valor da taxa de conversão deve ser positivo.")
-        self.bot.db_manager.set_config_value('taxa_conversao_prata', str(valor))
+        await self.bot.db_manager.set_config_value('taxa_conversao_prata', str(valor))
         await ctx.send(f"✅ Taxa de conversão definida para 1 🪙 = **{valor:,}** 🥈.")
 
     @commands.group(name="cargo", invoke_without_command=True)
@@ -199,7 +197,7 @@ class Admin(commands.Cog):
             return await ctx.send(f"❌ Tipo inválido. Tipos válidos: `{', '.join(tipos_validos)}`")
         
         chave = f"cargo_{tipo.lower()}"
-        self.bot.db_manager.set_config_value(chave, str(cargo.id))
+        await self.bot.db_manager.set_config_value(chave, str(cargo.id))
         await ctx.send(f"✅ O cargo **{tipo.capitalize()}** foi definido como {cargo.mention}.")
 
     @cargo.command(name="permissao")
@@ -208,7 +206,7 @@ class Admin(commands.Cog):
             return await ctx.send("❌ O nível de permissão deve ser entre 1 e 4.")
         
         chave = f"perm_nivel_{nivel}"
-        self.bot.db_manager.set_config_value(chave, str(cargo.id))
+        await self.bot.db_manager.set_config_value(chave, str(cargo.id))
         await ctx.send(f"✅ O cargo {cargo.mention} foi associado ao **Nível de Permissão {nivel}**.")
     
     @commands.group(name="definircanal", invoke_without_command=True)
@@ -218,12 +216,12 @@ class Admin(commands.Cog):
     
     @definir_canal.command(name="anuncios")
     async def definir_canal_anuncios(self, ctx, canal: discord.TextChannel):
-        self.bot.db_manager.set_config_value("canal_anuncios", str(canal.id))
+        await self.bot.db_manager.set_config_value("canal_anuncios", str(canal.id))
         await ctx.send(f"✅ O canal de anúncios foi definido como {canal.mention}.")
 
     @definir_canal.command(name="batepapo")
     async def definir_canal_batepapo(self, ctx, canal: discord.TextChannel):
-        self.bot.db_manager.set_config_value("canal_batepapo", str(canal.id))
+        await self.bot.db_manager.set_config_value("canal_batepapo", str(canal.id))
         await ctx.send(f"✅ O canal de bate-papo para mensagens de engajamento foi definido como {canal.mention}.")
 
     @commands.command(name="anunciar")
@@ -237,7 +235,7 @@ class Admin(commands.Cog):
             return await ctx.send("❌ Tipo de canal inválido. Use `mercado` ou `batepapo`.")
         
         chave_canal = tipos_validos[tipo_canal.lower()]
-        canal_id = self.bot.db_manager.get_config_value(chave_canal)
+        canal_id = await self.bot.db_manager.get_config_value(chave_canal)
 
         if not canal_id or canal_id == '0':
             return await ctx.send(f"⚠️ O canal `{tipo_canal}` ainda não foi configurado. Use `!definircanal`.")

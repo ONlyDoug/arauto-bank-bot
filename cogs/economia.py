@@ -7,37 +7,44 @@ class Economia(commands.Cog):
         self.bot = bot
 
     async def get_saldo(self, user_id: int):
-        with self.bot.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT saldo FROM banco WHERE user_id = %s", (user_id,))
-                resultado = cursor.fetchone()
-                if not resultado:
-                    cursor.execute("INSERT INTO banco (user_id, saldo) VALUES (%s, 0) ON CONFLICT (user_id) DO NOTHING", (user_id,))
-                    conn.commit()
-                    return 0
-                return resultado[0]
+        resultado = await self.bot.db_manager.execute_query(
+            "SELECT saldo FROM banco WHERE user_id = %s",
+            (user_id,),
+            fetch="one"
+        )
+        if not resultado:
+            await self.bot.db_manager.execute_query(
+                "INSERT INTO banco (user_id, saldo) VALUES (%s, 0) ON CONFLICT (user_id) DO NOTHING",
+                (user_id,)
+            )
+            return 0
+        return resultado[0]
 
     async def depositar(self, user_id: int, valor: int, descricao: str):
         saldo_atual = await self.get_saldo(user_id)
         novo_saldo = saldo_atual + valor
-        with self.bot.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("UPDATE banco SET saldo = %s WHERE user_id = %s", (novo_saldo, user_id))
-                cursor.execute("INSERT INTO transacoes (user_id, tipo, valor, descricao) VALUES (%s, 'deposito', %s, %s)",
-                               (user_id, valor, descricao))
-            conn.commit()
+        await self.bot.db_manager.execute_query(
+            "UPDATE banco SET saldo = %s WHERE user_id = %s",
+            (novo_saldo, user_id)
+        )
+        await self.bot.db_manager.execute_query(
+            "INSERT INTO transacoes (user_id, tipo, valor, descricao) VALUES (%s, 'deposito', %s, %s)",
+            (user_id, valor, descricao)
+        )
 
     async def levantar(self, user_id: int, valor: int, descricao: str):
         saldo_atual = await self.get_saldo(user_id)
         if saldo_atual < valor:
             raise ValueError("Saldo insuficiente.")
         novo_saldo = saldo_atual - valor
-        with self.bot.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("UPDATE banco SET saldo = %s WHERE user_id = %s", (novo_saldo, user_id))
-                cursor.execute("INSERT INTO transacoes (user_id, tipo, valor, descricao) VALUES (%s, 'levantamento', %s, %s)",
-                               (user_id, valor, descricao))
-            conn.commit()
+        await self.bot.db_manager.execute_query(
+            "UPDATE banco SET saldo = %s WHERE user_id = %s",
+            (novo_saldo, user_id)
+        )
+        await self.bot.db_manager.execute_query(
+            "INSERT INTO transacoes (user_id, tipo, valor, descricao) VALUES (%s, 'levantamento', %s, %s)",
+            (user_id, valor, descricao)
+        )
 
     @commands.command(name='saldo')
     async def saldo(self, ctx, target_user: discord.Member = None):
@@ -83,4 +90,3 @@ class Economia(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Economia(bot))
-

@@ -11,12 +11,12 @@ class DatabaseManager:
         self._min_conn = min_conn
         self._max_conn = max_conn
         self._pool = None
+        self._loop = asyncio.get_event_loop()
 
     async def connect(self):
         try:
-            loop = asyncio.get_event_loop()
-            self._pool = await loop.run_in_executor(
-                None, 
+            self._pool = await self._loop.run_in_executor(
+                None,
                 lambda: psycopg2.pool.SimpleConnectionPool(self._min_conn, self._max_conn, dsn=self._dsn)
             )
             if self._pool:
@@ -27,43 +27,14 @@ class DatabaseManager:
 
     async def close(self):
         if self._pool:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._pool.closeall)
+            await self._loop.run_in_executor(None, self._pool.closeall)
             print("Pool de conexões fechado.")
 
-    @contextlib.contextmanager
-    def get_connection(self):
-        if not self._pool:
-            raise Exception("O pool de conexões não foi inicializado ou foi perdido.")
-        
+    def _execute_sync(self, query, params=None, fetch=None):
+        """Função síncrona para ser executada no executor, com gestão de conexão."""
         conn = None
-        retries = 3
-        last_exception = None
-
-        for attempt in range(retries):
-            try:
-                conn = self._pool.getconn()
-                yield conn
-                return
-            except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
-                last_exception = e
-                print(f"AVISO: Erro de conexão com a DB (Tentativa {attempt + 1}/{retries}): {e}")
-                
-                if conn:
-                    self._pool.putconn(conn, close=True)
-                    conn = None
-                
-                time.sleep(1) 
-            finally:
-                if conn:
-                    self._pool.putconn(conn)
-        
-        print("ERRO: Não foi possível restabelecer a conexão com a base de dados após várias tentativas.")
-        raise last_exception
-
-    def execute_query(self, query, params=None, fetch=None):
-        """Executa uma query com a lógica de reconexão."""
-        with self.get_connection() as conn:
+        try:
+            conn = self._pool.getconn()
             with conn.cursor() as cursor:
                 cursor.execute(query, params)
                 if fetch == "one":
@@ -71,13 +42,42 @@ class DatabaseManager:
                 if fetch == "all":
                     return cursor.fetchall()
             conn.commit()
+        except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+            print(f"AVISO: Erro de conexão com a DB: {e}")
+            if conn:
+                self._pool.putconn(conn, close=True) # Fecha a conexão problemática
+            raise 
+        finally:
+            if conn:
+                self._pool.putconn(conn)
 
-    def get_config_value(self, chave: str, default: str = None):
-        resultado = self.execute_query("SELECT valor FROM configuracoes WHERE chave = %s", (chave,), fetch="one")
+    async def execute_query(self, query, params=None, fetch=None):
+        """Executa uma query de forma assíncrona, sem bloquear o loop de eventos."""
+        retries = 3
+        last_exception = None
+        for attempt in range(retries):
+            try:
+                return await self._loop.run_in_executor(
+                    None,  # Usa o executor de thread padrão
+                    self._execute_sync,
+                    query,
+                    params,
+                    fetch
+                )
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+                last_exception = e
+                print(f"AVISO: Tentativa de query falhou ({attempt + 1}/{retries}). A tentar novamente em 1s.")
+                await asyncio.sleep(1)
+        
+        print("ERRO: Não foi possível executar a query após várias tentativas.")
+        raise last_exception
+
+    async def get_config_value(self, chave: str, default: str = None):
+        resultado = await self.execute_query("SELECT valor FROM configuracoes WHERE chave = %s", (chave,), fetch="one")
         return resultado[0] if resultado else default
 
-    def set_config_value(self, chave: str, valor: str):
-        self.execute_query(
+    async def set_config_value(self, chave: str, valor: str):
+        await self.execute_query(
             "INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor",
             (chave, valor)
         )

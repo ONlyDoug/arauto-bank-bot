@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
 from utils.permissions import check_permission_level
-from utils.views import OrbeAprovacaoView # Importa a View do novo ficheiro
+from utils.views import OrbeAprovacaoView
 
 class Orbes(commands.Cog):
     def __init__(self, bot):
@@ -22,7 +22,7 @@ class Orbes(commands.Cog):
             await ctx.send(f"❌ Cor de orbe inválida. Use uma das seguintes: {', '.join(self.cores_orbe.keys())}.")
             return
         
-        self.db_manager.set_config_value(f"orbe_{cor_lower}", str(valor))
+        await self.db_manager.set_config_value(f"orbe_{cor_lower}", str(valor))
         await ctx.send(f"✅ Recompensa para a orbe **{self.cores_orbe[cor_lower]['nome']}** definida para **{valor}** moedas.")
 
     @commands.command(name="orbe")
@@ -46,14 +46,16 @@ class Orbes(commands.Cog):
         membros_ids_str = ",".join(str(m.id) for m in membros_unicos)
         membros_mencoes = "\n".join(f"• {m.mention}" for m in membros_unicos)
 
-        valor_total = int(self.bot.db_manager.get_config_value(f'orbe_{cor_lower}', '0'))
+        valor_total_str = await self.bot.db_manager.get_config_value(f'orbe_{cor_lower}', '0')
+        valor_total = int(valor_total_str)
         if valor_total == 0:
             await ctx.send(f"⚠️ A recompensa para a orbe {cor} ainda não foi configurada pela administração.")
             return
 
         recompensa_individual = valor_total // len(membros_unicos)
 
-        canal_aprovacao_id = int(self.bot.db_manager.get_config_value('canal_aprovacao', '0'))
+        canal_aprovacao_id_str = await self.bot.db_manager.get_config_value('canal_aprovacao', '0')
+        canal_aprovacao_id = int(canal_aprovacao_id_str)
         canal_aprovacao = self.bot.get_channel(canal_aprovacao_id)
 
         if not canal_aprovacao:
@@ -76,13 +78,10 @@ class Orbes(commands.Cog):
         try:
             msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
             
-            with self.db_manager.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        "INSERT INTO submissoes_orbe (message_id, cor, valor_total, autor_id, membros, status) VALUES (%s, %s, %s, %s, %s, %s)",
-                        (msg_aprovacao.id, cor_lower, valor_total, ctx.author.id, membros_ids_str, 'pendente')
-                    )
-                conn.commit()
+            await self.db_manager.execute_query(
+                "INSERT INTO submissoes_orbe (message_id, cor, valor_total, autor_id, membros, status) VALUES (%s, %s, %s, %s, %s, %s)",
+                (msg_aprovacao.id, cor_lower, valor_total, ctx.author.id, membros_ids_str, 'pendente')
+            )
 
             await ctx.message.add_reaction("✅")
             await ctx.send("✅ Submissão enviada para análise!", delete_after=10)
@@ -94,4 +93,3 @@ class Orbes(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Orbes(bot))
-

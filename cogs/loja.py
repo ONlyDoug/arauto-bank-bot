@@ -9,10 +9,10 @@ class Loja(commands.Cog):
 
     @commands.command(name='loja')
     async def ver_loja(self, ctx):
-        with self.bot.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT id, nome, preco, descricao FROM loja ORDER BY id ASC")
-                itens = cursor.fetchall()
+        itens = await self.bot.db_manager.execute_query(
+            "SELECT id, nome, preco, descricao FROM loja ORDER BY id ASC",
+            fetch="all"
+        )
         
         if not itens:
             return await ctx.send("A loja está vazia no momento.")
@@ -25,10 +25,11 @@ class Loja(commands.Cog):
 
     @commands.command(name='comprar')
     async def comprar_item(self, ctx, item_id: int):
-        with self.bot.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT nome, preco FROM loja WHERE id = %s", (item_id,))
-                item = cursor.fetchone()
+        item = await self.bot.db_manager.execute_query(
+            "SELECT nome, preco FROM loja WHERE id = %s",
+            (item_id,),
+            fetch="one"
+        )
 
         if not item:
             return await ctx.send("Item não encontrado.")
@@ -52,21 +53,20 @@ class Loja(commands.Cog):
         nome = partes[0].strip()
         descricao = partes[1].strip() if len(partes) > 1 else "Sem descrição."
 
-        with self.bot.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("INSERT INTO loja (id, nome, preco, descricao) VALUES (%s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET nome = EXCLUDED.nome, preco = EXCLUDED.preco, descricao = EXCLUDED.descricao",
-                               (item_id, nome, preco, descricao))
-            conn.commit()
+        await self.bot.db_manager.execute_query(
+            "INSERT INTO loja (id, nome, preco, descricao) VALUES (%s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET nome = EXCLUDED.nome, preco = EXCLUDED.preco, descricao = EXCLUDED.descricao",
+            (item_id, nome, preco, descricao)
+        )
         await ctx.send(f"✅ Item '{nome}' (ID: {item_id}) adicionado/atualizado na loja.")
 
     @commands.command(name='delitem')
     @check_permission_level(4)
     async def del_item(self, ctx, item_id: int):
-        with self.bot.db_manager.get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("DELETE FROM loja WHERE id = %s RETURNING nome", (item_id,))
-                item_removido = cursor.fetchone()
-            conn.commit()
+        item_removido = await self.bot.db_manager.execute_query(
+            "DELETE FROM loja WHERE id = %s RETURNING nome",
+            (item_id,),
+            fetch="one"
+        )
 
         if item_removido:
             await ctx.send(f"✅ Item '{item_removido[0]}' (ID: {item_id}) removido da loja.")

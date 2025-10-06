@@ -19,7 +19,7 @@ def check_permission_level(level: int):
         for i in range(level, 5):
             perm_key = f'perm_nivel_{i}'
             db_manager = bot.db_manager
-            role_id_str = db_manager.get_config_value(perm_key, '0')
+            role_id_str = await db_manager.get_config_value(perm_key, '0')
             if role_id_str in author_roles_ids:
                 return True
         
@@ -31,4 +31,3 @@ def check_permission_level(level: int):
         return False
     
     return commands.check(predicate)
-
