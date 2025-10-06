@@ -171,6 +171,22 @@ class Admin(commands.Cog):
         
         await msg_progresso.edit(content="✅ Estrutura de canais final criada e configurada com sucesso!")
 
+    @commands.command(name='definir-lastro')
+    @check_permission_level(4)
+    async def definir_lastro(self, ctx, valor: int):
+        if valor < 0:
+            return await ctx.send("❌ O valor do lastro não pode ser negativo.")
+        self.bot.db_manager.set_config_value('lastro_total_prata', str(valor))
+        await ctx.send(f"✅ Lastro total de prata definido para **{valor:,}** 🥈.")
+
+    @commands.command(name='definir-taxa-conversao')
+    @check_permission_level(4)
+    async def definir_taxa_conversao(self, ctx, valor: int):
+        if valor <= 0:
+            return await ctx.send("❌ O valor da taxa de conversão deve ser positivo.")
+        self.bot.db_manager.set_config_value('taxa_conversao_prata', str(valor))
+        await ctx.send(f"✅ Taxa de conversão definida para 1 🪙 = **{valor:,}** 🥈.")
+
     @commands.group(name="cargo", invoke_without_command=True)
     @check_permission_level(4)
     async def cargo(self, ctx):
