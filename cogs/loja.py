@@ -38,10 +38,38 @@ class Loja(commands.Cog):
         economia_cog = self.bot.get_cog('Economia')
         
         try:
+            # Debita o valor da conta do utilizador
             await economia_cog.levantar(ctx.author.id, preco_item, f"Compra na loja: {nome_item}")
-            await ctx.send(f"✅ Você comprou **{nome_item}** por `{preco_item:,} GC`.".replace(',', '.'))
+            
+            # Confirma a compra ao utilizador
+            await ctx.send(f"✅ Você comprou **{nome_item}** por `{preco_item:,} GC`! Um staff irá entregar o seu item em breve.".replace(',', '.'))
+
+            # Envia a notificação para o canal da staff
+            canal_resgates_id_str = await self.bot.db_manager.get_config_value('canal_resgates', '0')
+            if canal_resgates_id_str and canal_resgates_id_str != '0':
+                canal_resgates = self.bot.get_channel(int(canal_resgates_id_str))
+                if canal_resgates:
+                    embed = discord.Embed(
+                        title="📦 Pedido de Entrega da Loja",
+                        description=f"Um item foi comprado e precisa de ser entregue no jogo.",
+                        color=discord.Color.from_rgb(52, 152, 219) # Azul
+                    )
+                    embed.add_field(name="Comprador", value=ctx.author.mention, inline=True)
+                    embed.add_field(name="Item Comprado", value=f"{nome_item} (ID: {item_id})", inline=True)
+                    embed.set_footer(text="Staff: Por favor, entregue o item e reaja com ✅ a esta mensagem após a entrega.")
+                    
+                    try:
+                        await canal_resgates.send(embed=embed)
+                    except discord.Forbidden:
+                        print(f"ERRO: Não foi possível enviar a notificação de compra para o canal {canal_resgates.name}. Sem permissões.")
+                else:
+                    print(f"AVISO: O canal de resgates (ID: {canal_resgates_id_str}) está configurado mas não foi encontrado.")
+
         except ValueError as e:
             await ctx.send(f"❌ Erro: {e}")
+        except Exception as e:
+            await ctx.send("Ocorreu um erro inesperado durante a compra.")
+            print(f"Erro no comando comprar: {e}")
 
     @commands.command(name='additem')
     @check_permission_level(4)
