@@ -85,6 +85,5 @@ class Orbes(commands.Cog):
             await ctx.send("❌ Ocorreu um erro ao enviar a sua submissão. Tente novamente.")
             print(f"Erro no comando orbe: {e}")
 
-
 async def setup(bot):
     await bot.add_cog(Orbes(bot))

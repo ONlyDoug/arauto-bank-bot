@@ -98,10 +98,22 @@ class Eventos(commands.Cog):
             return await ctx.send(f"Evento '{nome_evento}' (ID: {evento_id}) finalizado. Nenhum participante atingiu a meta.")
 
         economia_cog = self.bot.get_cog('Economia')
-        for user_id in vencedores_ids:
-            await economia_cog.depositar(user_id, recompensa, f"Recompensa do evento '{nome_evento}'")
+        sucessos = 0
+        falhas = 0
         
-        await ctx.send(f"🎉 Evento '{nome_evento}' (ID: {evento_id}) finalizado! {len(vencedores_ids)} membros foram recompensados com `{recompensa} GC` cada.")
+        for user_id in vencedores_ids:
+            try:
+                await economia_cog.transferir_do_tesouro(user_id, recompensa, f"Recompensa do evento '{nome_evento}'")
+                sucessos += 1
+            except Exception as e:
+                falhas += 1
+                print(f"Falha ao pagar evento '{nome_evento}' para user {user_id}: {e}")
+
+        msg_final = f"🎉 Evento '{nome_evento}' (ID: {evento_id}) finalizado! {sucessos} membros foram recompensados com `{recompensa} GC` cada."
+        if falhas > 0:
+            msg_final += f"\n⚠️ **{falhas} pagamentos falharam.** Verifique os logs. (Provavelmente o tesouro não tem saldo suficiente)."
+        
+        await ctx.send(msg_final)
 
 async def setup(bot):
     await bot.add_cog(Eventos(bot))

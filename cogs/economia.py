@@ -5,6 +5,7 @@ from datetime import datetime
 class Economia(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.ID_TESOURO_GUILDA = 1
 
     async def get_saldo(self, user_id: int):
         resultado = await self.bot.db_manager.execute_query(
@@ -40,6 +41,21 @@ class Economia(commands.Cog):
             "INSERT INTO transacoes (user_id, tipo, valor, descricao) VALUES ($1, 'levantamento', $2, $3)",
             user_id, valor, descricao
         )
+
+    async def transferir_do_tesouro(self, destinatario_id: int, valor: int, descricao: str):
+        """Transfere moedas do tesouro para um membro, respeitando o lastro."""
+        try:
+            # Garante que a conta do destinatário existe
+            await self.get_saldo(destinatario_id)
+            
+            await self.levantar(self.ID_TESOURO_GUILDA, valor, f"Pagamento para {destinatario_id}: {descricao}")
+            await self.depositar(destinatario_id, valor, descricao)
+        except ValueError:
+            # Lança um erro específico se o tesouro não tiver fundos
+            raise ValueError("O Tesouro da Guilda não tem saldo suficiente para pagar esta recompensa.")
+        except Exception as e:
+            print(f"Erro inesperado em transferir_do_tesouro: {e}")
+            raise e
 
     @commands.command(name='saldo')
     async def saldo(self, ctx, target_user: discord.Member = None):

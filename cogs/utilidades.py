@@ -104,6 +104,25 @@ class Utilidades(commands.Cog):
 
         await ctx.send(embed=embed)
 
+    @commands.command(name="emitir")
+    @check_permission_level(3)
+    async def emitir(self, ctx, membro: discord.Member, valor: int):
+        """Transfere moedas do Tesouro da Guilda para o saldo de um membro."""
+        if valor <= 0:
+            return await ctx.send("❌ O valor a emitir deve ser positivo.")
+
+        economia_cog = self.bot.get_cog('Economia')
+        
+        try:
+            # Utiliza a nova função segura que garante o lastro
+            await economia_cog.transferir_do_tesouro(membro.id, valor, f"Emissão de moedas por {ctx.author.name}")
+            await ctx.send(f"✅ Emissão de **{valor}** moedas para {membro.mention} processada com sucesso.")
+        except ValueError as e:
+            await ctx.send(f"❌ Erro: {e}")
+        except Exception as e:
+            await ctx.send("Ocorreu um erro inesperado ao processar a emissão.")
+            print(f"Erro no comando emitir: {e}")
+
     @commands.command(name="resgatar")
     @check_permission_level(3)
     async def resgatar(self, ctx, membro: discord.Member, valor: int):

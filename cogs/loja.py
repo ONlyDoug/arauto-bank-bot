@@ -37,6 +37,7 @@ class Loja(commands.Cog):
         economia_cog = self.bot.get_cog('Economia')
         
         try:
+            # Usa o método levantar do cog Economia para garantir a lógica centralizada de débito
             await economia_cog.levantar(ctx.author.id, preco_item, f"Compra na loja: {nome_item}")
             
             canal_resgates_id_str = await self.bot.db_manager.get_config_value('canal_resgates', '0')

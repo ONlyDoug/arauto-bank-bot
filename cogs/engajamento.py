@@ -56,7 +56,7 @@ class Engajamento(commands.Cog):
                             limite_diario_moedas = (limite_voz_minutos / 5) * recompensa_voz
 
                             if total_ganho_hoje < limite_diario_moedas:
-                                await economia_cog.depositar(member.id, recompensa_voz, "Renda passiva por atividade em voz")
+                                await economia_cog.transferir_do_tesouro(member.id, recompensa_voz, "Renda passiva por atividade em voz")
                                 await self.registrar_renda_passiva(member.id, 'voz', recompensa_voz)
                         except Exception as e:
                             print(f"Erro ao processar membro de voz {member.id}: {e}")
@@ -97,7 +97,7 @@ class Engajamento(commands.Cog):
 
             self.chat_cooldowns[user_id] = agora
             economia_cog = self.bot.get_cog('Economia')
-            await economia_cog.depositar(user_id, recompensa_chat, "Renda passiva por atividade no chat")
+            await economia_cog.transferir_do_tesouro(user_id, recompensa_chat, "Renda passiva por atividade no chat")
             await self.registrar_renda_passiva(user_id, 'chat', recompensa_chat)
         except Exception as e:
             print(f"Erro em on_message para {user_id}: {e}")
@@ -124,7 +124,7 @@ class Engajamento(commands.Cog):
                 return
             
             economia_cog = self.bot.get_cog('Economia')
-            await economia_cog.depositar(payload.user_id, recompensa_reacao, f"Recompensa por reagir ao anúncio {payload.message_id}")
+            await economia_cog.transferir_do_tesouro(payload.user_id, recompensa_reacao, f"Recompensa por reagir ao anúncio {payload.message_id}")
             await self.registrar_renda_passiva(payload.user_id, 'reacao', recompensa_reacao)
         except Exception as e:
             print(f"Erro em on_raw_reaction_add para {payload.user_id}: {e}")
