@@ -10,7 +10,7 @@ class Admin(commands.Cog):
 
     async def initialize_database_schema(self):
         try:
-            # Estrutura de tabelas
+            # Estrutura de tabelas (placeholders agora são $1, $2, etc. para asyncpg)
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS banco (user_id BIGINT PRIMARY KEY, saldo BIGINT NOT NULL DEFAULT 0)")
             await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS transacoes (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL,
                 valor BIGINT NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)""")
@@ -28,26 +28,24 @@ class Admin(commands.Cog):
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS eventos_criados_log (criador_id BIGINT, data DATE, quantidade INTEGER, PRIMARY KEY (criador_id, data))")
             
             default_configs = {
-                'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
-                'taxa_semanal_valor': '500', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
+                'lastro_total_prata': '0', 'taxa_conversao_prata': '1000', 'taxa_semanal_valor': '500', 
+                'taxa_semanal_dia': '0', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
                 'perm_nivel_1': '0', 'perm_nivel_2': '0', 'perm_nivel_3': '0', 'perm_nivel_4': '0',
                 'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
                 'canal_resgates': '0', 'canal_batepapo': '0',
-                'recompensa_voz': '1', 'limite_voz': '120',
-                'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60',
-                'recompensa_reacao': '50',
+                'recompensa_voz': '1', 'limite_voz': '120', 'recompensa_chat': '1', 
+                'limite_chat': '100', 'cooldown_chat': '60', 'recompensa_reacao': '50',
                 'recompensa_evento_bronze': '50', 'recompensa_evento_prata': '100', 'recompensa_evento_ouro': '200',
                 'limite_puxador_diario': '5'
             }
             for chave, valor in default_configs.items():
-                await self.bot.db_manager.execute_query("INSERT INTO configuracoes (chave, valor) VALUES (%s, %s) ON CONFLICT (chave) DO NOTHING", (chave, valor))
+                await self.bot.db_manager.execute_query("INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING", (chave, valor))
             
-            await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES (%s, 0) ON CONFLICT (user_id) DO NOTHING", (1,))
-            
+            await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", (1,))
             print("Base de dados Supabase verificada e pronta.")
         except Exception as e:
             print(f"❌ Ocorreu um erro ao inicializar a base de dados: {e}")
-            raise e
+            raise
 
     @commands.command(name='initdb')
     @commands.has_permissions(administrator=True)
@@ -101,7 +99,8 @@ class Admin(commands.Cog):
         
         await msg_progresso.edit(content="🔥 Estrutura antiga removida. A criar a nova...")
 
-        perm_nivel_4_id = int(await self.bot.db_manager.get_config_value('perm_nivel_4', '0'))
+        perm_nivel_4_id_str = await self.bot.db_manager.get_config_value('perm_nivel_4', '0')
+        perm_nivel_4_id = int(perm_nivel_4_id_str)
         perm_nivel_4_role = guild.get_role(perm_nivel_4_id)
         admin_overwrites = { 
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -169,22 +168,6 @@ class Admin(commands.Cog):
         
         await msg_progresso.edit(content="✅ Estrutura de canais final criada e configurada com sucesso!")
 
-    @commands.command(name='definir-lastro')
-    @check_permission_level(4)
-    async def definir_lastro(self, ctx, valor: int):
-        if valor < 0:
-            return await ctx.send("❌ O valor do lastro não pode ser negativo.")
-        await self.bot.db_manager.set_config_value('lastro_total_prata', str(valor))
-        await ctx.send(f"✅ Lastro total de prata definido para **{valor:,}** 🥈.")
-
-    @commands.command(name='definir-taxa-conversao')
-    @check_permission_level(4)
-    async def definir_taxa_conversao(self, ctx, valor: int):
-        if valor <= 0:
-            return await ctx.send("❌ O valor da taxa de conversão deve ser positivo.")
-        await self.bot.db_manager.set_config_value('taxa_conversao_prata', str(valor))
-        await ctx.send(f"✅ Taxa de conversão definida para 1 🪙 = **{valor:,}** 🥈.")
-
     @commands.group(name="cargo", invoke_without_command=True)
     @check_permission_level(4)
     async def cargo(self, ctx):
@@ -227,20 +210,17 @@ class Admin(commands.Cog):
     @commands.command(name="anunciar")
     @check_permission_level(3)
     async def anunciar(self, ctx, tipo_canal: str, *, mensagem: str):
-        tipos_validos = {
-            "mercado": "canal_mercado",
-            "batepapo": "canal_batepapo"
-        }
+        tipos_validos = {"mercado": "canal_mercado", "batepapo": "canal_batepapo"}
         if tipo_canal.lower() not in tipos_validos:
             return await ctx.send("❌ Tipo de canal inválido. Use `mercado` ou `batepapo`.")
         
         chave_canal = tipos_validos[tipo_canal.lower()]
-        canal_id = await self.bot.db_manager.get_config_value(chave_canal)
+        canal_id_str = await self.bot.db_manager.get_config_value(chave_canal)
 
-        if not canal_id or canal_id == '0':
+        if not canal_id_str or canal_id_str == '0':
             return await ctx.send(f"⚠️ O canal `{tipo_canal}` ainda não foi configurado. Use `!definircanal`.")
 
-        canal = self.bot.get_channel(int(canal_id))
+        canal = self.bot.get_channel(int(canal_id_str))
         if not canal:
             return await ctx.send("❌ Canal não encontrado. Verifique se o bot tem acesso a ele.")
 
@@ -257,6 +237,22 @@ class Admin(commands.Cog):
             await ctx.send("✅ Anúncio enviado com sucesso!", delete_after=10)
         except discord.Forbidden:
             await ctx.send("❌ O bot não tem permissão para enviar mensagens nesse canal.")
+
+    @commands.command(name="definir-lastro")
+    @check_permission_level(4)
+    async def definir_lastro(self, ctx, valor: int):
+        if valor < 0:
+            return await ctx.send("❌ O valor do lastro não pode ser negativo.")
+        await self.bot.db_manager.set_config_value('lastro_total_prata', str(valor))
+        await ctx.send(f"✅ Lastro total de prata definido para **{valor:,}** 🥈.")
+
+    @commands.command(name="definir-taxa-conversao")
+    @check_permission_level(4)
+    async def definir_taxa_conversao(self, ctx, valor: int):
+        if valor <= 0:
+            return await ctx.send("❌ A taxa de conversão deve ser um valor positivo.")
+        await self.bot.db_manager.set_config_value('taxa_conversao_prata', str(valor))
+        await ctx.send(f"✅ Taxa de conversão definida para 1 🪙 = **{valor:,}** 🥈.")
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))
