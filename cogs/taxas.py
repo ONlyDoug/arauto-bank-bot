@@ -1,7 +1,8 @@
 import discord
 from discord.ext import commands, tasks
 from utils.permissions import check_permission_level
-from datetime import datetime
+from datetime import datetime, time, timedelta
+from utils.views import TaxaPrataView
 import asyncio
 
 class Taxas(commands.Cog):
@@ -13,104 +14,103 @@ class Taxas(commands.Cog):
     def cog_unload(self):
         self.ciclo_semanal_taxas.cancel()
 
-    async def regularizar_membro(self, membro: discord.Member):
-        """
-        Remove o cargo de inadimplente e adiciona o de membro, regularizando a situação do utilizador.
-        Esta função é chamada pelos comandos de pagamento.
-        """
-        # Obtém os IDs dos cargos a partir da base de dados
-        cargo_inadimplente_id = await self.bot.db_manager.get_config_value('cargo_inadimplente', '0')
-        cargo_membro_id = await self.bot.db_manager.get_config_value('cargo_membro', '0')
+    async def regularizar_membro(self, membro: discord.Member, configs: dict):
+        """Função para remover o cargo de inadimplente e devolver o de membro."""
+        cargo_inadimplente = membro.guild.get_role(configs.get('cargo_inadimplente', 0))
+        cargo_membro = membro.guild.get_role(configs.get('cargo_membro', 0))
 
-        if not cargo_inadimplente_id or not cargo_membro_id:
-            print("AVISO: Cargos de membro ou inadimplente não configurados. A função regularizar_membro não pode operar.")
+        if not cargo_inadimplente or not cargo_membro:
+            print("AVISO: Cargos de membro ou inadimplente não configurados.")
             return
 
-        cargo_inadimplente = membro.guild.get_role(int(cargo_inadimplente_id))
-        cargo_membro = membro.guild.get_role(int(cargo_membro_id))
+        try:
+            if cargo_inadimplente in membro.roles:
+                await membro.remove_roles(cargo_inadimplente, reason="Taxa regularizada")
+            if cargo_membro not in membro.roles:
+                await membro.add_roles(cargo_membro, reason="Taxa regularizada")
+        except discord.Forbidden:
+            print(f"Erro de permissão ao tentar alterar cargos para {membro.name}")
+        except Exception as e:
+            print(f"Erro inesperado ao alterar cargos para {membro.name}: {e}")
 
-        if cargo_inadimplente and cargo_inadimplente in membro.roles:
-            await membro.remove_roles(cargo_inadimplente, reason="Pagamento de taxa regularizado")
-        
-        if cargo_membro and cargo_membro not in membro.roles:
-            await membro.add_roles(cargo_membro, reason="Pagamento de taxa regularizado")
-
-    @tasks.loop(hours=1) # Verifica a cada hora
+    @tasks.loop(time=time(hour=12, minute=0, tzinfo=datetime.now().astimezone().tzinfo))
     async def ciclo_semanal_taxas(self):
-        await self.bot.wait_until_ready()
-        
-        # O dia da semana para a cobrança (0=Segunda, 6=Domingo)
-        dia_cobranca = int(await self.bot.db_manager.get_config_value('taxa_dia_semana', '0'))
-        
-        agora = datetime.utcnow()
+        """Verifica diariamente se é o dia de executar o ciclo de taxas."""
+        dia_semana_config_str = await self.bot.db_manager.get_config_value('taxa_dia_semana', '-1')
+        dia_semana_config = int(dia_semana_config_str)
+        hoje = datetime.now().weekday() # Segunda é 0, Domingo é 6
 
-        # Verifica se hoje é o dia da cobrança e se a tarefa já foi executada hoje
-        if agora.weekday() == dia_cobranca:
-            data_hoje_str = agora.strftime('%Y-%m-%d')
-            ultima_execucao = await self.bot.db_manager.get_config_value('taxa_ultima_execucao', '')
+        if hoje == dia_semana_config:
+            print(f"Hoje é dia {hoje}, o dia configurado para as taxas. A iniciar o ciclo.")
+            await self.executar_ciclo_de_taxas()
+        else:
+            print(f"Hoje é dia {hoje}, não é o dia configurado para as taxas ({dia_semana_config}). A aguardar.")
 
-            if ultima_execucao != data_hoje_str:
-                print(f"A iniciar ciclo de taxas para {data_hoje_str}...")
-                await self.executar_ciclo_de_taxas()
-                await self.bot.db_manager.set_config_value('taxa_ultima_execucao', data_hoje_str)
-
-    async def executar_ciclo_de_taxas(self, guild_override: discord.Guild = None):
-        """
-        Lógica principal que aplica o status de inadimplente a todos os membros elegíveis.
-        Pode ser chamada pela tarefa agendada ou manualmente por um admin.
-        """
-        guilds = [guild_override] if guild_override else self.bot.guilds
+    async def executar_ciclo_de_taxas(self, ctx=None):
+        """A lógica que remove o cargo de membro e adiciona o de inadimplente."""
+        if ctx: guild = ctx.guild
+        else: guild = self.bot.guilds[0] if self.bot.guilds else None
         
-        # Carrega todas as configurações necessárias de uma só vez
+        if not guild:
+            print("ERRO: O bot não está em nenhum servidor para executar o ciclo de taxas.")
+            return
+
         configs = await self.bot.db_manager.get_all_configs([
-            'cargo_membro', 'cargo_inadimplente', 'cargo_isento', 'canal_aprovacao'
+            'cargo_membro', 'cargo_inadimplente', 'cargo_isento'
         ])
         
-        cargo_membro_id = int(configs.get('cargo_membro', '0'))
-        cargo_inadimplente_id = int(configs.get('cargo_inadimplente', '0'))
-        cargo_isento_id = int(configs.get('cargo_isento', '0'))
-        canal_log_id = int(configs.get('canal_aprovacao', '0'))
+        cargo_membro = guild.get_role(configs.get('cargo_membro', 0))
+        cargo_inadimplente = guild.get_role(configs.get('cargo_inadimplente', 0))
+        cargo_isento = guild.get_role(configs.get('cargo_isento', 0))
 
-        if not cargo_membro_id or not cargo_inadimplente_id:
-            print("CICLO DE TAXAS IGNORADO: Cargos de membro ou inadimplente não configurados.")
+        if not cargo_membro or not cargo_inadimplente:
+            msg = "ERRO: O ciclo de taxas não pode ser executado. Os cargos de Membro e Inadimplente precisam de ser configurados."
+            print(msg)
+            if ctx: await ctx.send(msg)
             return
 
-        for guild in guilds:
-            cargo_membro = guild.get_role(cargo_membro_id)
-            cargo_inadimplente = guild.get_role(cargo_inadimplente_id)
-            cargo_isento = guild.get_role(cargo_isento_id) if cargo_isento_id else None
+        membros_a_processar = [m for m in guild.members if cargo_membro in m.roles and not m.bot]
+        if cargo_isento:
+            membros_a_processar = [m for m in membros_a_processar if cargo_isento not in m.roles]
 
-            if not cargo_membro or not cargo_inadimplente:
-                print(f"CICLO DE TAXAS IGNORADO na guilda {guild.name}: Cargos não encontrados.")
-                continue
-
-            membros_afetados = 0
-            for membro in guild.members:
-                if membro.bot:
-                    continue
-                
-                # Ignora membros que já são inadimplentes ou são isentos
-                if cargo_inadimplente in membro.roles or (cargo_isento and cargo_isento in membro.roles):
-                    continue
-                
-                # Aplica o cargo de inadimplente e remove o de membro
-                if cargo_membro in membro.roles:
-                    await membro.remove_roles(cargo_membro, reason="Início do ciclo de taxas")
-                
-                await membro.add_roles(cargo_inadimplente, reason="Início do ciclo de taxas")
-                membros_afetados += 1
+        if not membros_a_processar:
+            msg = "Ciclo de taxas executado. Nenhum membro elegível encontrado para aplicar a taxa."
+            print(msg)
+            if ctx: await ctx.send(msg)
+            return
+            
+        inadimplentes_ids = [m.id for m in membros_a_processar]
+        
+        for membro in membros_a_processar:
+            try:
+                await membro.remove_roles(cargo_membro, reason="Início do ciclo de taxa semanal")
+                await membro.add_roles(cargo_inadimplente, reason="Início do ciclo de taxa semanal")
                 await asyncio.sleep(0.5) # Pausa para não sobrecarregar a API
+            except discord.Forbidden:
+                print(f"Sem permissão para alterar cargos do membro {membro.name} ({membro.id})")
+            except Exception as e:
+                print(f"Erro ao processar cargos para {membro.name}: {e}")
 
-            # Envia um log para o canal de administração
-            if canal_log_id:
-                canal_log = self.bot.get_channel(canal_log_id)
-                if canal_log:
-                    await canal_log.send(f"✅ **Ciclo de Taxas Iniciado**\n`{membros_afetados}` membros foram marcados como inadimplentes e precisam de pagar a taxa semanal.")
+        # Atualiza o status na DB
+        for user_id in inadimplentes_ids:
+            await self.bot.db_manager.execute_query(
+                "INSERT INTO taxas (user_id, status) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET status = EXCLUDED.status",
+                (user_id, 'inadimplente')
+            )
+
+        msg = f"✅ Ciclo de taxas finalizado. {len(inadimplentes_ids)} membros foram marcados como inadimplentes."
+        print(msg)
+        if ctx: await ctx.send(msg)
+    
+    @ciclo_semanal_taxas.before_loop
+    async def before_ciclo_taxas(self):
+        await self.bot.wait_until_ready()
+        print("Tarefa do ciclo de taxas está pronta e a aguardar a hora certa.")
 
     @commands.command(name="pagar-taxa")
     async def pagar_taxa(self, ctx):
-        valor_taxa_str = await self.bot.db_manager.get_config_value('taxa_semanal_valor', '0')
-        valor_taxa = int(valor_taxa_str)
+        configs = await self.bot.db_manager.get_all_configs(['taxa_semanal_valor', 'cargo_membro', 'cargo_inadimplente'])
+        valor_taxa = int(configs.get('taxa_semanal_valor', 0))
 
         if valor_taxa == 0:
             return await ctx.send("O sistema de taxas não está configurado.")
@@ -118,22 +118,22 @@ class Taxas(commands.Cog):
         economia_cog = self.bot.get_cog('Economia')
         try:
             await economia_cog.levantar(ctx.author.id, valor_taxa, "Pagamento de taxa semanal")
-            await self.regularizar_membro(ctx.author)
+            await self.regularizar_membro(ctx.author, configs)
+            await self.bot.db_manager.execute_query(
+                "UPDATE taxas SET status = 'pago' WHERE user_id = $1", (ctx.author.id,)
+            )
             await ctx.send("✅ Taxa paga com sucesso! O seu acesso foi restaurado.")
         except ValueError:
             await ctx.send("❌ Você não tem saldo suficiente para pagar a taxa.")
 
     @commands.command(name="paguei-prata")
     async def paguei_prata(self, ctx):
-        if not ctx.message.attachments:
+        if not ctx.message.attachments or not ctx.message.attachments[0].content_type.startswith('image/'):
             return await ctx.send("❌ Você precisa de anexar um print (imagem) do comprovativo de pagamento.", delete_after=15)
 
         imagem = ctx.message.attachments[0]
-        if not imagem.content_type.startswith('image/'):
-            return await ctx.send("❌ O anexo precisa de ser uma imagem.", delete_after=15)
-
-        canal_aprovacao_id = int(await self.bot.db_manager.get_config_value('canal_aprovacao', '0'))
-        canal_aprovacao = self.bot.get_channel(canal_aprovacao_id)
+        canal_aprovacao_id_str = await self.bot.db_manager.get_config_value('canal_aprovacao', '0')
+        canal_aprovacao = self.bot.get_channel(int(canal_aprovacao_id_str))
 
         if not canal_aprovacao:
             return await ctx.send("⚠️ O canal de aprovações não foi configurado. Contacte um administrador.")
@@ -147,17 +147,13 @@ class Taxas(commands.Cog):
         embed.set_image(url=imagem.url)
         embed.set_footer(text="Aguardando aprovação da Staff...")
         
-        view = self.bot.get_view("TaxaPrataView") # Reutiliza a view persistente
-        if not view:
-            # Fallback caso a view não seja encontrada (não deveria acontecer)
-            from utils.views import TaxaPrataView as FallbackView
-            view = FallbackView(self.bot)
+        view = TaxaPrataView(self.bot)
 
         try:
             msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
             
             await self.bot.db_manager.execute_query(
-                "INSERT INTO submissoes_taxa (message_id, user_id, status, url_imagem) VALUES (%s, %s, %s, %s) ON CONFLICT (message_id) DO UPDATE SET user_id = EXCLUDED.user_id, status = EXCLUDED.status, url_imagem = EXCLUDED.url_imagem",
+                "INSERT INTO submissoes_taxa (message_id, user_id, status, url_imagem) VALUES ($1, $2, $3, $4) ON CONFLICT (message_id) DO UPDATE SET user_id = EXCLUDED.user_id, status = EXCLUDED.status, url_imagem = EXCLUDED.url_imagem",
                 (msg_aprovacao.id, ctx.author.id, 'pendente', imagem.url)
             )
 
@@ -168,8 +164,6 @@ class Taxas(commands.Cog):
             await ctx.send("❌ Ocorreu um erro ao enviar o seu comprovativo.")
             print(f"Erro no comando paguei-prata: {e}")
 
-    # --- Comandos de Configuração de Taxas ---
-    
     @commands.command(name="definir-taxa")
     @check_permission_level(4)
     async def definir_taxa(self, ctx, valor: int):
@@ -177,25 +171,21 @@ class Taxas(commands.Cog):
             return await ctx.send("O valor da taxa não pode ser negativo.")
         await self.bot.db_manager.set_config_value('taxa_semanal_valor', str(valor))
         await ctx.send(f"✅ Valor da taxa semanal definido para **{valor}** moedas.")
-
+        
     @commands.command(name="definir-taxa-dia")
     @check_permission_level(4)
-    async def definir_taxa_dia(self, ctx, dia: int):
-        if not 0 <= dia <= 6:
-            return await ctx.send("❌ O dia deve ser um número entre 0 (Segunda) e 6 (Domingo).")
-        
-        dias_semana = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
-        await self.bot.db_manager.set_config_value('taxa_dia_semana', str(dia))
-        await ctx.send(f"✅ O ciclo de taxas foi agendado para ser executado todas as **{dias_semana[dia]}**.")
+    async def definir_taxa_dia(self, ctx, dia_da_semana: int):
+        if not 0 <= dia_da_semana <= 6:
+            return await ctx.send("❌ O dia da semana deve ser um número de 0 (Segunda) a 6 (Domingo).")
+        dias = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
+        await self.bot.db_manager.set_config_value('taxa_dia_semana', str(dia_da_semana))
+        await ctx.send(f"✅ O ciclo de taxas foi agendado para ser executado todas as **{dias[dia_da_semana]}**.")
 
     @commands.command(name="forcar-taxa")
     @check_permission_level(4)
     async def forcar_taxa(self, ctx):
-        """Comando de teste para forçar a execução do ciclo de taxas."""
-        msg = await ctx.send("Forçando a execução do ciclo de taxas para todos os membros... Isto pode demorar.")
-        await self.executar_ciclo_de_taxas(ctx.guild)
-        await msg.edit(content="✅ Ciclo de taxas executado manualmente com sucesso.")
-
+        await ctx.send("🔥 A forçar a execução do ciclo de taxas... Isto pode demorar um pouco.")
+        await self.executar_ciclo_de_taxas(ctx)
 
 async def setup(bot):
     await bot.add_cog(Taxas(bot))

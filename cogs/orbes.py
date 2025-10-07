@@ -1,12 +1,11 @@
 import discord
 from discord.ext import commands
 from utils.permissions import check_permission_level
-from utils.views import OrbeAprovacaoView
+from utils.views import OrbeAprovacaoView # Importa a View do novo ficheiro
 
 class Orbes(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.db_manager = self.bot.db_manager
         self.cores_orbe = {
             "verde": {"nome": "Verde", "cor": discord.Color.green()},
             "azul": {"nome": "Azul", "cor": discord.Color.blue()},
@@ -22,7 +21,7 @@ class Orbes(commands.Cog):
             await ctx.send(f"❌ Cor de orbe inválida. Use uma das seguintes: {', '.join(self.cores_orbe.keys())}.")
             return
         
-        await self.db_manager.set_config_value(f"orbe_{cor_lower}", str(valor))
+        await self.bot.db_manager.set_config_value(f"orbe_{cor_lower}", str(valor))
         await ctx.send(f"✅ Recompensa para a orbe **{self.cores_orbe[cor_lower]['nome']}** definida para **{valor}** moedas.")
 
     @commands.command(name="orbe")
@@ -41,7 +40,7 @@ class Orbes(commands.Cog):
             await ctx.send("❌ O anexo precisa de ser uma imagem.")
             return
 
-        todos_membros = [ctx.author] + membros
+        todos_membros = [ctx.author] + [m for m in membros if not m.bot]
         membros_unicos = sorted(list(set(todos_membros)), key=lambda m: m.id)
         membros_ids_str = ",".join(str(m.id) for m in membros_unicos)
         membros_mencoes = "\n".join(f"• {m.mention}" for m in membros_unicos)
@@ -55,8 +54,7 @@ class Orbes(commands.Cog):
         recompensa_individual = valor_total // len(membros_unicos)
 
         canal_aprovacao_id_str = await self.bot.db_manager.get_config_value('canal_aprovacao', '0')
-        canal_aprovacao_id = int(canal_aprovacao_id_str)
-        canal_aprovacao = self.bot.get_channel(canal_aprovacao_id)
+        canal_aprovacao = self.bot.get_channel(int(canal_aprovacao_id_str))
 
         if not canal_aprovacao:
             await ctx.send("⚠️ O canal de aprovações não foi configurado. Contacte um administrador.")
@@ -78,8 +76,8 @@ class Orbes(commands.Cog):
         try:
             msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
             
-            await self.db_manager.execute_query(
-                "INSERT INTO submissoes_orbe (message_id, cor, valor_total, autor_id, membros, status) VALUES (%s, %s, %s, %s, %s, %s)",
+            await self.bot.db_manager.execute_query(
+                "INSERT INTO submissoes_orbe (message_id, cor, valor_total, autor_id, membros, status) VALUES ($1, $2, $3, $4, $5, $6)",
                 (msg_aprovacao.id, cor_lower, valor_total, ctx.author.id, membros_ids_str, 'pendente')
             )
 
@@ -93,3 +91,4 @@ class Orbes(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Orbes(bot))
+

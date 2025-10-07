@@ -18,10 +18,9 @@ class Utilidades(commands.Cog):
     @commands.command(name="info-moeda", aliases=["infomoeda"])
     async def info_moeda(self, ctx):
         """Mostra as estatísticas vitais da economia da guilda."""
-        total_prata_str = await self.bot.db_manager.get_config_value('lastro_total_prata', '0')
-        taxa_conversao_str = await self.bot.db_manager.get_config_value('taxa_conversao_prata', '1000')
-        total_prata = int(total_prata_str)
-        taxa_conversao = int(taxa_conversao_str)
+        configs = await self.bot.db_manager.get_all_configs(['lastro_total_prata', 'taxa_conversao_prata'])
+        total_prata = int(configs.get('lastro_total_prata', 0))
+        taxa_conversao = int(configs.get('taxa_conversao_prata', 1000))
         
         suprimento_maximo = total_prata // taxa_conversao if taxa_conversao > 0 else 0
         
@@ -57,13 +56,13 @@ class Utilidades(commands.Cog):
         user_id = ctx.author.id
         
         transacoes = await self.bot.db_manager.execute_query(
-            "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = %s AND DATE(data AT TIME ZONE 'UTC') = %s ORDER BY data DESC",
+            "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = $1 AND DATE(data AT TIME ZONE 'UTC') = $2 ORDER BY data DESC",
             (user_id, data_alvo),
             fetch="all"
         )
         
         renda_passiva = await self.bot.db_manager.execute_query(
-            "SELECT tipo, SUM(valor) FROM renda_passiva_log WHERE user_id = %s AND data = %s GROUP BY tipo",
+            "SELECT tipo, SUM(valor) as total FROM renda_passiva_log WHERE user_id = $1 AND data = $2 GROUP BY tipo",
             (user_id, data_alvo),
             fetch="all"
         )
@@ -77,7 +76,8 @@ class Utilidades(commands.Cog):
 
         if renda_passiva:
             renda_texto = ""
-            for tipo, total in renda_passiva:
+            for item in renda_passiva:
+                tipo, total = item['tipo'], item['total']
                 if tipo == 'voz':
                     renda_texto += f"🎤 **Voz:** Ganhou **{total}** moedas por tempo em call.\n"
                 elif tipo == 'chat':
@@ -89,17 +89,17 @@ class Utilidades(commands.Cog):
 
         if transacoes:
             texto_transacoes = ""
-            transacoes_principais = [t for t in transacoes if t[2] not in ["Renda passiva por atividade em voz", "Renda passiva por atividade no chat"] and not t[2].startswith("Recompensa por reagir")]
+            transacoes_principais = [t for t in transacoes if t['descricao'] not in ["Renda passiva por atividade em voz", "Renda passiva por atividade no chat"] and not t['descricao'].startswith("Recompensa por reagir")]
             
-            for tipo, valor, descricao, data in transacoes_principais[:10]:
-                emoji = "📥" if tipo == 'deposito' else "📤"
-                sinal = "+" if tipo == 'deposito' else "-"
-                texto_transacoes += f"{emoji} `{data.strftime('%H:%M')}`: **{sinal}{valor}** moedas ({descricao})\n"
+            for t in transacoes_principais[:10]:
+                emoji = "📥" if t['tipo'] == 'deposito' else "📤"
+                sinal = "+" if t['tipo'] == 'deposito' else "-"
+                texto_transacoes += f"{emoji} `{t['data'].strftime('%H:%M')}`: **{sinal}{t['valor']}** moedas ({t['descricao']})\n"
             
             if texto_transacoes:
                 embed.add_field(name="Transações Principais", value=texto_transacoes, inline=False)
         
-        if not renda_passiva and not any(t for t in transacoes if t[2] not in ["Renda passiva por atividade em voz", "Renda passiva por atividade no chat"] and not t[2].startswith("Recompensa por reagir")):
+        if not renda_passiva and not any(t for t in transacoes if t['descricao'] not in ["Renda passiva por atividade em voz", "Renda passiva por atividade no chat"] and not t['descricao'].startswith("Recompensa por reagir")):
             embed.description += "\n\nNenhuma atividade registada para esta data."
 
         await ctx.send(embed=embed)
@@ -115,11 +115,13 @@ class Utilidades(commands.Cog):
         try:
             await economia_cog.levantar(membro.id, valor, f"Resgate de moedas por {ctx.author.name}")
 
-            canal_resgates_id = int(await self.bot.db_manager.get_config_value('canal_resgates', '0'))
+            configs = await self.bot.db_manager.get_all_configs(['canal_resgates', 'taxa_conversao_prata'])
+            canal_resgates_id = int(configs.get('canal_resgates', '0'))
+
             if canal_resgates_id != 0:
                 canal = self.bot.get_channel(canal_resgates_id)
                 if canal:
-                    taxa_conversao = int(await self.bot.db_manager.get_config_value('taxa_conversao_prata', '1000'))
+                    taxa_conversao = int(configs.get('taxa_conversao_prata', '1000'))
                     valor_prata = valor * taxa_conversao
                     
                     embed = discord.Embed(
@@ -137,6 +139,7 @@ class Utilidades(commands.Cog):
         except ValueError as e:
              await ctx.send(f"❌ Erro: {e}")
 
+
     @commands.command(name="airdrop")
     @check_permission_level(3)
     async def airdrop(self, ctx, valor: int, cargo: discord.Role = None):
@@ -152,11 +155,20 @@ class Utilidades(commands.Cog):
         
         msg_espera = await ctx.send(f"A iniciar o airdrop de **{valor}** moedas para **{len(membros_alvo)}** membros. Isto pode demorar um pouco...")
 
+        erros = 0
+        sucessos = 0
         for membro in membros_alvo:
-            await economia_cog.depositar(membro.id, valor, "Airdrop da Administração")
-            await asyncio.sleep(0.1) 
+            try:
+                await economia_cog.depositar(membro.id, valor, "Airdrop da Administração")
+                sucessos += 1
+            except Exception as e:
+                print(f"Erro ao depositar airdrop para {membro.name}: {e}")
+                erros += 1
+            await asyncio.sleep(0.2) 
 
-        await msg_espera.edit(content=f"✅ Airdrop concluído com sucesso para **{len(membros_alvo)}** membros!")
+        await msg_espera.edit(content=f"✅ Airdrop concluído! **{sucessos}** membros receberam as moedas. Falhas: **{erros}**.")
+
 
 async def setup(bot):
     await bot.add_cog(Utilidades(bot))
+

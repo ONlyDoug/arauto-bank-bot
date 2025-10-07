@@ -19,7 +19,7 @@ class Engajamento(commands.Cog):
     async def registrar_renda_passiva(self, user_id, tipo, valor):
         data_hoje = datetime.utcnow().date()
         await self.bot.db_manager.execute_query(
-            "INSERT INTO renda_passiva_log (user_id, tipo, data, valor) VALUES (%s, %s, %s, %s) "
+            "INSERT INTO renda_passiva_log (user_id, tipo, data, valor) VALUES ($1, $2, $3, $4) "
             "ON CONFLICT (user_id, tipo, data) DO UPDATE SET valor = renda_passiva_log.valor + EXCLUDED.valor",
             (user_id, tipo, data_hoje, valor)
         )
@@ -27,17 +27,18 @@ class Engajamento(commands.Cog):
     async def get_total_renda_passiva_diaria(self, user_id, tipo):
         data_hoje = datetime.utcnow().date()
         total = await self.bot.db_manager.execute_query(
-            "SELECT valor FROM renda_passiva_log WHERE user_id = %s AND tipo = %s AND data = %s",
+            "SELECT valor FROM renda_passiva_log WHERE user_id = $1 AND tipo = $2 AND data = $3",
             (user_id, tipo, data_hoje),
             fetch="one"
         )
-        return total[0] if total else 0
+        return total['valor'] if total else 0
 
     @tasks.loop(minutes=5)
     async def recompensar_voz(self):
         try:
-            recompensa_voz = int(await self.bot.db_manager.get_config_value('recompensa_voz', '0'))
-            limite_voz_minutos = int(await self.bot.db_manager.get_config_value('limite_voz', '0'))
+            configs = await self.bot.db_manager.get_all_configs(['recompensa_voz', 'limite_voz'])
+            recompensa_voz = int(configs.get('recompensa_voz', '0'))
+            limite_voz_minutos = int(configs.get('limite_voz', '0'))
 
             if recompensa_voz == 0 or limite_voz_minutos == 0:
                 return
@@ -46,8 +47,10 @@ class Engajamento(commands.Cog):
 
             for guild in self.bot.guilds:
                 for channel in guild.voice_channels:
-                    membros_ativos = [m for m in channel.members if not m.bot and not m.voice.self_deaf and not m.voice.self_mute]
-                    for member in membros_ativos:
+                    for member in channel.members:
+                        if member.bot or member.voice.self_deaf or member.voice.self_mute:
+                            continue
+                        
                         try:
                             total_ganho_hoje = await self.get_total_renda_passiva_diaria(member.id, 'voz')
                             limite_diario_moedas = (limite_voz_minutos / 5) * recompensa_voz
@@ -55,14 +58,10 @@ class Engajamento(commands.Cog):
                             if total_ganho_hoje < limite_diario_moedas:
                                 await economia_cog.depositar(member.id, recompensa_voz, "Renda passiva por atividade em voz")
                                 await self.registrar_renda_passiva(member.id, 'voz', recompensa_voz)
-                            
-                            # **CORREÇÃO CRÍTICA**: Cede o controlo ao loop de eventos após cada membro.
-                            # Isto impede que a tarefa bloqueie o heartbeat do bot.
-                            await asyncio.sleep(0)
-
                         except Exception as e:
                             print(f"Erro ao processar membro de voz {member.id}: {e}")
-                            await asyncio.sleep(0) # Garante que o loop continue mesmo se um membro falhar
+
+                        await asyncio.sleep(0)
 
         except Exception as e:
             print(f"Erro fatal na tarefa de recompensar_voz: {e}")
@@ -78,50 +77,57 @@ class Engajamento(commands.Cog):
 
         user_id = message.author.id
         agora = datetime.utcnow()
+        
+        try:
+            configs = await self.bot.db_manager.get_all_configs(['recompensa_chat', 'limite_chat', 'cooldown_chat'])
+            recompensa_chat = int(configs.get('recompensa_chat', '0'))
+            limite_chat = int(configs.get('limite_chat', '0'))
+            cooldown_chat = int(configs.get('cooldown_chat', '60'))
 
-        recompensa_chat = int(await self.bot.db_manager.get_config_value('recompensa_chat', '0'))
-        limite_chat = int(await self.bot.db_manager.get_config_value('limite_chat', '0'))
-        cooldown_chat = int(await self.bot.db_manager.get_config_value('cooldown_chat', '60'))
+            if recompensa_chat == 0 or limite_chat == 0:
+                return
 
-        if recompensa_chat == 0 or limite_chat == 0:
-            return
+            total_ganho_hoje = await self.get_total_renda_passiva_diaria(user_id, 'chat')
+            if total_ganho_hoje >= limite_chat:
+                return
 
-        total_ganho_hoje = await self.get_total_renda_passiva_diaria(user_id, 'chat')
-        if total_ganho_hoje >= limite_chat:
-            return
+            last_message_time = self.chat_cooldowns.get(user_id)
+            if last_message_time and (agora - last_message_time).total_seconds() < cooldown_chat:
+                return
 
-        last_message_time = self.chat_cooldowns.get(user_id)
-        if last_message_time and (agora - last_message_time).total_seconds() < cooldown_chat:
-            return
-
-        self.chat_cooldowns[user_id] = agora
-        economia_cog = self.bot.get_cog('Economia')
-        await economia_cog.depositar(user_id, recompensa_chat, "Renda passiva por atividade no chat")
-        await self.registrar_renda_passiva(user_id, 'chat', recompensa_chat)
+            self.chat_cooldowns[user_id] = agora
+            economia_cog = self.bot.get_cog('Economia')
+            await economia_cog.depositar(user_id, recompensa_chat, "Renda passiva por atividade no chat")
+            await self.registrar_renda_passiva(user_id, 'chat', recompensa_chat)
+        except Exception as e:
+            print(f"Erro em on_message para {user_id}: {e}")
 
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload):
         if payload.member.bot:
             return
 
-        canal_anuncios_id = await self.bot.db_manager.get_config_value('canal_anuncios', '0')
-        recompensa_reacao = int(await self.bot.db_manager.get_config_value('recompensa_reacao', '0'))
+        try:
+            configs = await self.bot.db_manager.get_all_configs(['canal_anuncios', 'recompensa_reacao'])
+            canal_anuncios_id = configs.get('canal_anuncios', '0')
+            recompensa_reacao = int(configs.get('recompensa_reacao', '0'))
 
-        if recompensa_reacao == 0 or str(payload.channel_id) != canal_anuncios_id:
-            return
-        
-        # Evitar dupla recompensa
-        transacao_existente = await self.bot.db_manager.execute_query(
-            "SELECT 1 FROM transacoes WHERE user_id = %s AND descricao = %s",
-            (payload.user_id, f"Recompensa por reagir ao anúncio {payload.message_id}"),
-            fetch="one"
-        )
-        if transacao_existente:
-            return
-        
-        economia_cog = self.bot.get_cog('Economia')
-        await economia_cog.depositar(payload.user_id, recompensa_reacao, f"Recompensa por reagir ao anúncio {payload.message_id}")
-        await self.registrar_renda_passiva(payload.user_id, 'reacao', recompensa_reacao)
+            if recompensa_reacao == 0 or str(payload.channel_id) != canal_anuncios_id:
+                return
+            
+            transacao_existente = await self.bot.db_manager.execute_query(
+                "SELECT 1 FROM transacoes WHERE user_id = $1 AND descricao = $2",
+                (payload.user_id, f"Recompensa por reagir ao anúncio {payload.message_id}"),
+                fetch="one"
+            )
+            if transacao_existente:
+                return
+            
+            economia_cog = self.bot.get_cog('Economia')
+            await economia_cog.depositar(payload.user_id, recompensa_reacao, f"Recompensa por reagir ao anúncio {payload.message_id}")
+            await self.registrar_renda_passiva(payload.user_id, 'reacao', recompensa_reacao)
+        except Exception as e:
+            print(f"Erro em on_raw_reaction_add para {payload.user_id}: {e}")
 
 
     @tasks.loop(hours=4)
@@ -149,10 +155,7 @@ class Engajamento(commands.Cog):
                 "Quanto mais participamos, mais forte a guilda fica e mais recompensas todos ganham. Continuem com o bom trabalho!"
             ]
             
-            embed = discord.Embed(
-                description=random.choice(mensagens),
-                color=discord.Color.random()
-            )
+            embed = discord.Embed(description=random.choice(mensagens), color=discord.Color.random())
             await canal.send(embed=embed)
 
         except Exception as e:
