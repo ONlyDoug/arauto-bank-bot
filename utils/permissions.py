@@ -24,7 +24,8 @@ def check_permission_level(level: int):
                 return True
         
         if isinstance(ctx_or_interaction, commands.Context):
-            await channel.send("Você não tem permissão para usar este comando.", delete_after=10)
+            # Não enviamos mais mensagens de erro daqui para evitar spam. O check global já trata disso.
+            pass
         else:
             await ctx_or_interaction.response.send_message("Você não tem permissão para executar esta ação.", ephemeral=True, delete_after=10)
 

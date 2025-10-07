@@ -19,8 +19,8 @@ class Utilidades(commands.Cog):
     async def info_moeda(self, ctx):
         """Mostra as estatísticas vitais da economia da guilda."""
         configs = await self.bot.db_manager.get_all_configs(['lastro_total_prata', 'taxa_conversao_prata'])
-        total_prata = int(configs.get('lastro_total_prata', 0))
-        taxa_conversao = int(configs.get('taxa_conversao_prata', 1000))
+        total_prata = int(configs.get('lastro_total_prata', '0'))
+        taxa_conversao = int(configs.get('taxa_conversao_prata', '1000'))
         
         suprimento_maximo = total_prata // taxa_conversao if taxa_conversao > 0 else 0
         
@@ -57,13 +57,13 @@ class Utilidades(commands.Cog):
         
         transacoes = await self.bot.db_manager.execute_query(
             "SELECT tipo, valor, descricao, data FROM transacoes WHERE user_id = $1 AND DATE(data AT TIME ZONE 'UTC') = $2 ORDER BY data DESC",
-            (user_id, data_alvo),
+            user_id, data_alvo,
             fetch="all"
         )
         
         renda_passiva = await self.bot.db_manager.execute_query(
             "SELECT tipo, SUM(valor) as total FROM renda_passiva_log WHERE user_id = $1 AND data = $2 GROUP BY tipo",
-            (user_id, data_alvo),
+            user_id, data_alvo,
             fetch="all"
         )
 
@@ -171,4 +171,3 @@ class Utilidades(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Utilidades(bot))
-

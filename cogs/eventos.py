@@ -15,7 +15,7 @@ class Eventos(commands.Cog):
         
         resultado = await self.bot.db_manager.execute_query(
             "INSERT INTO eventos (nome, recompensa, meta_participacao, criador_id) VALUES ($1, $2, $3, $4) RETURNING id",
-            (nome, recompensa, meta, ctx.author.id), fetch="one"
+            nome, recompensa, meta, ctx.author.id, fetch="one"
         )
         evento_id = resultado['id']
         
@@ -42,14 +42,14 @@ class Eventos(commands.Cog):
     @commands.command(name='participar')
     async def participar(self, ctx, evento_id: int):
         evento = await self.bot.db_manager.execute_query(
-            "SELECT 1 FROM eventos WHERE id = $1 AND ativo = TRUE", (evento_id,), fetch="one"
+            "SELECT 1 FROM eventos WHERE id = $1 AND ativo = TRUE", evento_id, fetch="one"
         )
         if not evento:
             return await ctx.send("Evento não encontrado ou inativo.")
         
         await self.bot.db_manager.execute_query(
             "INSERT INTO participantes (evento_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            (evento_id, ctx.author.id)
+            evento_id, ctx.author.id
         )
         await ctx.send(f"✅ Você inscreveu-se no evento ID {evento_id}!")
 
@@ -60,7 +60,7 @@ class Eventos(commands.Cog):
             return await ctx.send("Você precisa de mencionar pelo menos um membro.")
             
         evento = await self.bot.db_manager.execute_query(
-            "SELECT 1 FROM eventos WHERE id = $1 AND ativo = TRUE", (evento_id,), fetch="one"
+            "SELECT 1 FROM eventos WHERE id = $1 AND ativo = TRUE", evento_id, fetch="one"
         )
         if not evento:
             return await ctx.send("Evento não encontrado ou inativo.")
@@ -68,7 +68,7 @@ class Eventos(commands.Cog):
         membros_ids = [m.id for m in membros]
         await self.bot.db_manager.execute_query(
             "UPDATE participantes SET progresso = progresso + 1 WHERE evento_id = $1 AND user_id = ANY($2::BIGINT[])",
-            (evento_id, membros_ids)
+            evento_id, membros_ids
         )
         await ctx.send(f"✅ Progresso adicionado para {len(membros)} membros no evento ID {evento_id}.")
 
@@ -77,7 +77,7 @@ class Eventos(commands.Cog):
     async def finalizar_evento(self, ctx, evento_id: int):
         evento_info = await self.bot.db_manager.execute_query(
             "SELECT recompensa, meta_participacao, nome FROM eventos WHERE id = $1 AND ativo = TRUE",
-            (evento_id,), fetch="one"
+            evento_id, fetch="one"
         )
         if not evento_info:
             return await ctx.send("Evento não encontrado ou já finalizado.")
@@ -86,12 +86,12 @@ class Eventos(commands.Cog):
         
         vencedores = await self.bot.db_manager.execute_query(
             "SELECT user_id FROM participantes WHERE evento_id = $1 AND progresso >= $2",
-            (evento_id, meta), fetch="all"
+            evento_id, meta, fetch="all"
         )
         vencedores_ids = [rec['user_id'] for rec in vencedores]
         
         await self.bot.db_manager.execute_query(
-            "UPDATE eventos SET ativo = FALSE WHERE id = $1", (evento_id,)
+            "UPDATE eventos SET ativo = FALSE WHERE id = $1", evento_id
         )
 
         if not vencedores_ids:
@@ -105,4 +105,3 @@ class Eventos(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Eventos(bot))
-

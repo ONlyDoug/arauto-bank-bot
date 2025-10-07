@@ -21,14 +21,14 @@ class Engajamento(commands.Cog):
         await self.bot.db_manager.execute_query(
             "INSERT INTO renda_passiva_log (user_id, tipo, data, valor) VALUES ($1, $2, $3, $4) "
             "ON CONFLICT (user_id, tipo, data) DO UPDATE SET valor = renda_passiva_log.valor + EXCLUDED.valor",
-            (user_id, tipo, data_hoje, valor)
+            user_id, tipo, data_hoje, valor
         )
 
     async def get_total_renda_passiva_diaria(self, user_id, tipo):
         data_hoje = datetime.utcnow().date()
         total = await self.bot.db_manager.execute_query(
             "SELECT valor FROM renda_passiva_log WHERE user_id = $1 AND tipo = $2 AND data = $3",
-            (user_id, tipo, data_hoje),
+            user_id, tipo, data_hoje,
             fetch="one"
         )
         return total['valor'] if total else 0
@@ -117,7 +117,7 @@ class Engajamento(commands.Cog):
             
             transacao_existente = await self.bot.db_manager.execute_query(
                 "SELECT 1 FROM transacoes WHERE user_id = $1 AND descricao = $2",
-                (payload.user_id, f"Recompensa por reagir ao anúncio {payload.message_id}"),
+                payload.user_id, f"Recompensa por reagir ao anúncio {payload.message_id}",
                 fetch="one"
             )
             if transacao_existente:
@@ -169,4 +169,3 @@ class Engajamento(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Engajamento(bot))
-

@@ -27,27 +27,25 @@ class DatabaseManager:
             await self._pool.close()
             print("Pool de conexões fechado.")
 
-    async def execute_query(self, query, params=None, fetch=None):
+    async def execute_query(self, query, *params, fetch=None):
         """Executa uma query de forma assíncrona."""
         if not self._pool:
             raise Exception("O pool de conexões não foi inicializado.")
             
         async with self._pool.acquire() as conn:
-            # asyncpg usa transações por padrão em blocos 'with', garantindo atomicidade.
             if fetch == "one":
-                return await conn.fetchrow(query, *params if params else [])
+                return await conn.fetchrow(query, *params)
             elif fetch == "all":
-                return await conn.fetch(query, *params if params else [])
+                return await conn.fetch(query, *params)
             else:
-                await conn.execute(query, *params if params else [])
+                await conn.execute(query, *params)
                 return None
 
     async def get_config_value(self, chave: str, default: str = None):
         """Obtém um único valor de configuração da base de dados."""
-        # asyncpg usa $1, $2 como placeholders
         resultado = await self.execute_query(
             "SELECT valor FROM configuracoes WHERE chave = $1",
-            (chave,),
+            chave,
             fetch="one"
         )
         return resultado['valor'] if resultado else default
@@ -58,13 +56,12 @@ class DatabaseManager:
             return {}
             
         query = "SELECT chave, valor FROM configuracoes WHERE chave = ANY($1::TEXT[])"
-        resultados = await self.execute_query(query, (chaves,), fetch="all")
+        resultados = await self.execute_query(query, chaves, fetch="all")
         return {rec['chave']: rec['valor'] for rec in resultados}
 
     async def set_config_value(self, chave: str, valor: str):
         """Define um único valor de configuração na base de dados."""
         await self.execute_query(
             "INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor",
-            (chave, valor)
+            chave, valor
         )
-

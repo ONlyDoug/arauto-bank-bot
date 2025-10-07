@@ -8,11 +8,11 @@ class Economia(commands.Cog):
 
     async def get_saldo(self, user_id: int):
         resultado = await self.bot.db_manager.execute_query(
-            "SELECT saldo FROM banco WHERE user_id = $1", (user_id,), fetch="one"
+            "SELECT saldo FROM banco WHERE user_id = $1", user_id, fetch="one"
         )
         if not resultado:
             await self.bot.db_manager.execute_query(
-                "INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", (user_id,)
+                "INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", user_id
             )
             return 0
         return resultado['saldo']
@@ -21,11 +21,11 @@ class Economia(commands.Cog):
         # Garante que o usuário existe antes de tentar depositar
         await self.get_saldo(user_id)
         await self.bot.db_manager.execute_query(
-            "UPDATE banco SET saldo = saldo + $1 WHERE user_id = $2", (valor, user_id)
+            "UPDATE banco SET saldo = saldo + $1 WHERE user_id = $2", valor, user_id
         )
         await self.bot.db_manager.execute_query(
             "INSERT INTO transacoes (user_id, tipo, valor, descricao) VALUES ($1, 'deposito', $2, $3)",
-            (user_id, valor, descricao)
+            user_id, valor, descricao
         )
 
     async def levantar(self, user_id: int, valor: int, descricao: str):
@@ -34,11 +34,11 @@ class Economia(commands.Cog):
             raise ValueError("Saldo insuficiente.")
         
         await self.bot.db_manager.execute_query(
-            "UPDATE banco SET saldo = saldo - $1 WHERE user_id = $2", (valor, user_id)
+            "UPDATE banco SET saldo = saldo - $1 WHERE user_id = $2", valor, user_id
         )
         await self.bot.db_manager.execute_query(
             "INSERT INTO transacoes (user_id, tipo, valor, descricao) VALUES ($1, 'levantamento', $2, $3)",
-            (user_id, valor, descricao)
+            user_id, valor, descricao
         )
 
     @commands.command(name='saldo')
@@ -81,5 +81,3 @@ class Economia(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Economia(bot))
-
-

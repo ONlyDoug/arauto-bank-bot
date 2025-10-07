@@ -27,7 +27,7 @@ class Loja(commands.Cog):
     @commands.command(name='comprar')
     async def comprar_item(self, ctx, item_id: int):
         item = await self.bot.db_manager.execute_query(
-            "SELECT nome, preco FROM loja WHERE id = $1", (item_id,), fetch="one"
+            "SELECT nome, preco FROM loja WHERE id = $1", item_id, fetch="one"
         )
 
         if not item:
@@ -39,7 +39,6 @@ class Loja(commands.Cog):
         try:
             await economia_cog.levantar(ctx.author.id, preco_item, f"Compra na loja: {nome_item}")
             
-            # Notificação para a staff
             canal_resgates_id_str = await self.bot.db_manager.get_config_value('canal_resgates', '0')
             if canal_resgates_id_str != '0':
                 canal = self.bot.get_channel(int(canal_resgates_id_str))
@@ -71,7 +70,7 @@ class Loja(commands.Cog):
 
         await self.bot.db_manager.execute_query(
             "INSERT INTO loja (id, nome, preco, descricao) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET nome = EXCLUDED.nome, preco = EXCLUDED.preco, descricao = EXCLUDED.descricao",
-            (item_id, nome, preco, descricao)
+            item_id, nome, preco, descricao
         )
         await ctx.send(f"✅ Item '{nome}' (ID: {item_id}) adicionado/atualizado na loja.")
 
@@ -79,7 +78,7 @@ class Loja(commands.Cog):
     @check_permission_level(4)
     async def del_item(self, ctx, item_id: int):
         item_removido = await self.bot.db_manager.execute_query(
-            "DELETE FROM loja WHERE id = $1 RETURNING nome", (item_id,), fetch="one"
+            "DELETE FROM loja WHERE id = $1 RETURNING nome", item_id, fetch="one"
         )
 
         if item_removido:
@@ -89,4 +88,3 @@ class Loja(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Loja(bot))
-

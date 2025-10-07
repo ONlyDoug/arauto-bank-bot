@@ -16,8 +16,8 @@ class Taxas(commands.Cog):
 
     async def regularizar_membro(self, membro: discord.Member, configs: dict):
         """Função para remover o cargo de inadimplente e devolver o de membro."""
-        cargo_inadimplente = membro.guild.get_role(configs.get('cargo_inadimplente', 0))
-        cargo_membro = membro.guild.get_role(configs.get('cargo_membro', 0))
+        cargo_inadimplente = membro.guild.get_role(int(configs.get('cargo_inadimplente', '0')))
+        cargo_membro = membro.guild.get_role(int(configs.get('cargo_membro', '0')))
 
         if not cargo_inadimplente or not cargo_membro:
             print("AVISO: Cargos de membro ou inadimplente não configurados.")
@@ -44,29 +44,30 @@ class Taxas(commands.Cog):
             print(f"Hoje é dia {hoje}, o dia configurado para as taxas. A iniciar o ciclo.")
             await self.executar_ciclo_de_taxas()
         else:
-            print(f"Hoje é dia {hoje}, não é o dia configurado para as taxas ({dia_semana_config}). A aguardar.")
+            print(f"Hoje é dia {hoje}, não é o dia configurado ({dia_semana_config}). A aguardar.")
 
     async def executar_ciclo_de_taxas(self, ctx=None):
         """A lógica que remove o cargo de membro e adiciona o de inadimplente."""
-        if ctx: guild = ctx.guild
-        else: guild = self.bot.guilds[0] if self.bot.guilds else None
+        guild = ctx.guild if ctx else self.bot.guilds[0] if self.bot.guilds else None
         
         if not guild:
             print("ERRO: O bot não está em nenhum servidor para executar o ciclo de taxas.")
             return
 
         configs = await self.bot.db_manager.get_all_configs([
-            'cargo_membro', 'cargo_inadimplente', 'cargo_isento'
+            'cargo_membro', 'cargo_inadimplente', 'cargo_isento', 'canal_log_taxas'
         ])
         
-        cargo_membro = guild.get_role(configs.get('cargo_membro', 0))
-        cargo_inadimplente = guild.get_role(configs.get('cargo_inadimplente', 0))
-        cargo_isento = guild.get_role(configs.get('cargo_isento', 0))
+        cargo_membro = guild.get_role(int(configs.get('cargo_membro', '0')))
+        cargo_inadimplente = guild.get_role(int(configs.get('cargo_inadimplente', '0')))
+        cargo_isento = guild.get_role(int(configs.get('cargo_isento', '0')))
+        canal_log = self.bot.get_channel(int(configs.get('canal_log_taxas', '0')))
 
         if not cargo_membro or not cargo_inadimplente:
             msg = "ERRO: O ciclo de taxas não pode ser executado. Os cargos de Membro e Inadimplente precisam de ser configurados."
             print(msg)
             if ctx: await ctx.send(msg)
+            if canal_log: await canal_log.send(msg)
             return
 
         membros_a_processar = [m for m in guild.members if cargo_membro in m.roles and not m.bot]
@@ -77,31 +78,44 @@ class Taxas(commands.Cog):
             msg = "Ciclo de taxas executado. Nenhum membro elegível encontrado para aplicar a taxa."
             print(msg)
             if ctx: await ctx.send(msg)
+            if canal_log: await canal_log.send(f"ℹ️ {msg}")
             return
             
-        inadimplentes_ids = [m.id for m in membros_a_processar]
-        
+        afetados = 0
+        falhas = 0
+        lista_falhas = []
+
         for membro in membros_a_processar:
             try:
                 await membro.remove_roles(cargo_membro, reason="Início do ciclo de taxa semanal")
                 await membro.add_roles(cargo_inadimplente, reason="Início do ciclo de taxa semanal")
-                await asyncio.sleep(0.5) # Pausa para não sobrecarregar a API
+                afetados += 1
+                await asyncio.sleep(0.5) 
             except discord.Forbidden:
+                falhas += 1
+                lista_falhas.append(f"{membro.name}#{membro.discriminator} (Permissão negada)")
                 print(f"Sem permissão para alterar cargos do membro {membro.name} ({membro.id})")
             except Exception as e:
+                falhas += 1
+                lista_falhas.append(f"{membro.name}#{membro.discriminator} (Erro: {e})")
                 print(f"Erro ao processar cargos para {membro.name}: {e}")
-
-        # Atualiza o status na DB
-        for user_id in inadimplentes_ids:
+        
+        if afetados > 0:
+            ids_afetados = [m.id for m in membros_a_processar[:afetados]]
             await self.bot.db_manager.execute_query(
-                "INSERT INTO taxas (user_id, status) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET status = EXCLUDED.status",
-                (user_id, 'inadimplente')
+                "INSERT INTO taxas (user_id, status) SELECT user_id, 'inadimplente' FROM UNNEST($1::BIGINT[]) as t(user_id) ON CONFLICT (user_id) DO UPDATE SET status = 'inadimplente'",
+                ids_afetados
             )
 
-        msg = f"✅ Ciclo de taxas finalizado. {len(inadimplentes_ids)} membros foram marcados como inadimplentes."
+        msg = f"✅ Ciclo de taxas finalizado. {afetados} membros foram marcados como inadimplentes. Falhas: {falhas}."
         print(msg)
         if ctx: await ctx.send(msg)
-    
+        if canal_log:
+            embed = discord.Embed(title="Relatório do Ciclo de Taxas", description=msg, color=discord.Color.green())
+            if falhas > 0:
+                embed.add_field(name="Detalhes das Falhas", value="\n".join(lista_falhas), inline=False)
+            await canal_log.send(embed=embed)
+
     @ciclo_semanal_taxas.before_loop
     async def before_ciclo_taxas(self):
         await self.bot.wait_until_ready()
@@ -120,7 +134,7 @@ class Taxas(commands.Cog):
             await economia_cog.levantar(ctx.author.id, valor_taxa, "Pagamento de taxa semanal")
             await self.regularizar_membro(ctx.author, configs)
             await self.bot.db_manager.execute_query(
-                "UPDATE taxas SET status = 'pago' WHERE user_id = $1", (ctx.author.id,)
+                "UPDATE taxas SET status = 'pago' WHERE user_id = $1", ctx.author.id
             )
             await ctx.send("✅ Taxa paga com sucesso! O seu acesso foi restaurado.")
         except ValueError:
@@ -154,7 +168,7 @@ class Taxas(commands.Cog):
             
             await self.bot.db_manager.execute_query(
                 "INSERT INTO submissoes_taxa (message_id, user_id, status, url_imagem) VALUES ($1, $2, $3, $4) ON CONFLICT (message_id) DO UPDATE SET user_id = EXCLUDED.user_id, status = EXCLUDED.status, url_imagem = EXCLUDED.url_imagem",
-                (msg_aprovacao.id, ctx.author.id, 'pendente', imagem.url)
+                msg_aprovacao.id, ctx.author.id, 'pendente', imagem.url
             )
 
             await ctx.message.add_reaction("✅")
@@ -189,4 +203,3 @@ class Taxas(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Taxas(bot))
-
