@@ -285,11 +285,49 @@ class Admin(commands.Cog):
         await self.bot.db_manager.set_config_value('taxa_conversao_prata', str(valor))
         await ctx.send(f"✅ Taxa de conversão definida para **1 🪙 = {valor:,} 🥈**.".replace(',', '.'))
 
+    @commands.command(name="verificarconfig")
+    @check_permission_level(4)
+    async def verificar_config(self, ctx):
+        """Exibe uma lista detalhada dos cargos e permissões configurados."""
+        await ctx.send("🔍 A verificar as configurações de cargos e permissões...")
+
+        chaves_cargos = [
+            'cargo_membro', 'cargo_inadimplente', 'cargo_isento',
+            'perm_nivel_1', 'perm_nivel_2', 'perm_nivel_3', 'perm_nivel_4'
+        ]
+
+        configs = await self.bot.db_manager.get_all_configs(chaves_cargos)
+
+        embed = discord.Embed(
+            title="⚙️ Verificação de Configuração do Arauto Bank",
+            description="Esta é a lista de todos os cargos funcionais e de permissão registados no bot.",
+            color=discord.Color.orange()
+        )
+
+        # Seção de Cargos Funcionais
+        funcional_desc = ""
+        for chave in ['cargo_membro', 'cargo_inadimplente', 'cargo_isento']:
+            role_id = int(configs.get(chave, '0'))
+            role = ctx.guild.get_role(role_id) if role_id != 0 else None
+            status = role.mention if role else "⚠️ **Não definido**"
+            funcional_desc += f"**{chave.replace('_', ' ').capitalize()}:** {status}\n"
+        embed.add_field(name="Cargos Funcionais", value=funcional_desc, inline=False)
+
+        # Seção de Cargos de Permissão
+        permissao_desc = ""
+        for i in range(1, 5):
+            chave = f'perm_nivel_{i}'
+            role_id = int(configs.get(chave, '0'))
+            role = ctx.guild.get_role(role_id) if role_id != 0 else None
+            status = role.mention if role else "⚠️ **Não definido**"
+            permissao_desc += f"**Permissão Nível {i}:** {status}\n"
+        embed.add_field(name="Hierarquia de Permissões", value=permissao_desc, inline=False)
+
+        embed.set_footer(text="Use !cargo definir e !cargo permissao para ajustar estas configurações.")
+
+        await ctx.send(embed=embed)
+
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))
-
-
-
-
 
