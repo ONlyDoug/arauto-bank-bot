@@ -61,7 +61,7 @@ class Loja(commands.Cog):
             
     @commands.command(name='additem')
     @check_permission_level(4)
-    async def add_item(self, ctx, item_id: int, preco: int, *, nome_e_descricao: str):
+    async def add_item(self, ctx, preco: int, *, nome_e_descricao: str):
         if preco <= 0:
             return await ctx.send("O preço deve ser um valor positivo.")
         
@@ -69,11 +69,13 @@ class Loja(commands.Cog):
         nome = partes[0].strip()
         descricao = partes[1].strip() if len(partes) > 1 else "Sem descrição."
 
-        await self.bot.db_manager.execute_query(
-            "INSERT INTO loja (id, nome, preco, descricao) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET nome = EXCLUDED.nome, preco = EXCLUDED.preco, descricao = EXCLUDED.descricao",
-            item_id, nome, preco, descricao
+        # A query agora não precisa de ID, pois ele é SERIAL (auto-incremento)
+        resultado = await self.bot.db_manager.execute_query(
+            "INSERT INTO loja (nome, preco, descricao) VALUES ($1, $2, $3) RETURNING id",
+            nome, preco, descricao, fetch="one"
         )
-        await ctx.send(f"✅ Item '{nome}' (ID: {item_id}) adicionado/atualizado na loja.")
+        novo_id = resultado['id']
+        await ctx.send(f"✅ Item '{nome}' adicionado à loja com o **ID: {novo_id}**.")
 
     @commands.command(name='delitem')
     @check_permission_level(4)

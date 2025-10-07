@@ -118,6 +118,64 @@ class Eventos(commands.Cog):
         )
         await ctx.send(f"✅ Progresso adicionado para {len(membros)} membros no evento ID {evento_id}.")
 
+    @commands.command(name='confirmartodos')
+    @check_permission_level(1)
+    async def confirmar_todos(self, ctx, evento_id: int):
+        """Confirma a participação de todos os membros inscritos num evento."""
+        evento = await self.bot.db_manager.execute_query(
+            "SELECT 1 FROM eventos WHERE id = $1 AND ativo = TRUE", evento_id, fetch="one"
+        )
+        if not evento:
+            return await ctx.send("Evento não encontrado ou inativo.")
+
+        # Obter todos os IDs de participantes do evento
+        participantes = await self.bot.db_manager.execute_query(
+            "SELECT user_id FROM participantes WHERE evento_id = $1", evento_id, fetch="all"
+        )
+        if not participantes:
+            return await ctx.send("Nenhum membro inscrito neste evento.")
+
+        membros_ids = [p['user_id'] for p in participantes]
+        
+        await self.bot.db_manager.execute_query(
+            "UPDATE participantes SET progresso = progresso + 1 WHERE evento_id = $1",
+            evento_id
+        )
+        await ctx.send(f"✅ Progresso adicionado para **todos os {len(membros_ids)}** membros inscritos no evento ID {evento_id}.")
+
+    @commands.command(name='confirmarexceto')
+    @check_permission_level(1)
+    async def confirmar_exceto(self, ctx, evento_id: int, membros_excluidos: commands.Greedy[discord.Member]):
+        """Confirma todos, exceto os membros mencionados."""
+        if not membros_excluidos:
+            return await ctx.send("Você precisa de mencionar pelo menos um membro para excluir da confirmação.")
+
+        evento = await self.bot.db_manager.execute_query(
+            "SELECT 1 FROM eventos WHERE id = $1 AND ativo = TRUE", evento_id, fetch="one"
+        )
+        if not evento:
+            return await ctx.send("Evento não encontrado ou inativo.")
+
+        ids_excluidos = {m.id for m in membros_excluidos}
+
+        # Obter todos os participantes e filtrar os que não devem ser confirmados
+        participantes = await self.bot.db_manager.execute_query(
+            "SELECT user_id FROM participantes WHERE evento_id = $1", evento_id, fetch="all"
+        )
+        if not participantes:
+            return await ctx.send("Nenhum membro inscrito neste evento.")
+
+        membros_a_confirmar_ids = [p['user_id'] for p in participantes if p['user_id'] not in ids_excluidos]
+
+        if not membros_a_confirmar_ids:
+            return await ctx.send("Nenhum membro para confirmar após a exclusão.")
+
+        await self.bot.db_manager.execute_query(
+            "UPDATE participantes SET progresso = progresso + 1 WHERE evento_id = $1 AND user_id = ANY($2::BIGINT[])",
+            evento_id, membros_a_confirmar_ids
+        )
+        await ctx.send(f"✅ Progresso adicionado para **{len(membros_a_confirmar_ids)}** membros no evento ID {evento_id} (excluindo {len(membros_excluidos)} mencionados).")
+
     @commands.command(name='finalizarevento')
     @check_permission_level(1)
     async def finalizar_evento(self, ctx, evento_id: int):
