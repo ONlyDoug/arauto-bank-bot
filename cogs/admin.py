@@ -22,9 +22,8 @@ class Admin(commands.Cog):
             await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS taxas (user_id BIGINT PRIMARY KEY, data_vencimento DATE, status TEXT DEFAULT 'pago')""")
             await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS submissoes_orbe (id SERIAL PRIMARY KEY, message_id BIGINT, cor TEXT NOT NULL, 
                 valor_total INTEGER NOT NULL, autor_id BIGINT, membros TEXT, status TEXT DEFAULT 'pendente')""")
-            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS loja (id INTEGER PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
+            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS loja (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS renda_passiva_log (user_id BIGINT, tipo TEXT, data DATE, valor INTEGER, PRIMARY KEY (user_id, tipo, data))")
-            # CORREÇÃO APLICADA: A coluna 'url_imagem' foi removida da definição da tabela para consistência futura.
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS submissoes_taxa (message_id BIGINT PRIMARY KEY, user_id BIGINT, status TEXT)")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS eventos_criados_log (criador_id BIGINT, data DATE, quantidade INTEGER, PRIMARY KEY (criador_id, data))")
             
@@ -259,8 +258,24 @@ class Admin(commands.Cog):
     async def definir_lastro(self, ctx, valor: int):
         if valor < 0:
             return await ctx.send("❌ O valor do lastro não pode ser negativo.")
+        
+        # Salva o valor do lastro na configuração
         await self.bot.db_manager.set_config_value('lastro_total_prata', str(valor))
-        await ctx.send(f"✅ Lastro total de prata definido para **{valor:,}** 🥈.".replace(',', '.'))
+        
+        # Calcula o novo suprimento máximo e atualiza o saldo do tesouro
+        taxa_conversao_str = await self.bot.db_manager.get_config_value('taxa_conversao_prata', '1000')
+        taxa_conversao = int(taxa_conversao_str)
+        
+        suprimento_maximo = valor // taxa_conversao if taxa_conversao > 0 else 0
+        
+        ID_TESOURO_GUILDA = 1
+        await self.bot.db_manager.execute_query(
+            "UPDATE banco SET saldo = $1 WHERE user_id = $2",
+            suprimento_maximo, ID_TESOURO_GUILDA
+        )
+        
+        await ctx.send(f"✅ Lastro total de prata definido para **{valor:,}** 🥈. O tesouro da guilda foi atualizado para **{suprimento_maximo:,}** 🪙.".replace(',', '.'))
+
 
     @commands.command(name="definir-taxa-conversao")
     @check_permission_level(4)
@@ -273,6 +288,8 @@ class Admin(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))
+
+
 
 
 
