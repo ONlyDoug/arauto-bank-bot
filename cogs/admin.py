@@ -10,7 +10,7 @@ class Admin(commands.Cog):
 
     async def initialize_database_schema(self):
         try:
-            # Estrutura de tabelas (placeholders agora são $1, $2, etc. para asyncpg)
+            # Estrutura de tabelas - usa $1, $2, etc. para asyncpg
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS banco (user_id BIGINT PRIMARY KEY, saldo BIGINT NOT NULL DEFAULT 0)")
             await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS transacoes (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL,
                 valor BIGINT NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)""")
@@ -28,31 +28,38 @@ class Admin(commands.Cog):
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS eventos_criados_log (criador_id BIGINT, data DATE, quantidade INTEGER, PRIMARY KEY (criador_id, data))")
             
             default_configs = {
-                'lastro_total_prata': '0', 'taxa_conversao_prata': '1000', 'taxa_semanal_valor': '500', 
-                'taxa_semanal_dia': '0', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
+                'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
+                'taxa_semanal_valor': '500', 'taxa_semanal_dia': '6', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
                 'perm_nivel_1': '0', 'perm_nivel_2': '0', 'perm_nivel_3': '0', 'perm_nivel_4': '0',
                 'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
-                'canal_resgates': '0', 'canal_batepapo': '0',
-                'recompensa_voz': '1', 'limite_voz': '120', 'recompensa_chat': '1', 
-                'limite_chat': '100', 'cooldown_chat': '60', 'recompensa_reacao': '50',
+                'canal_resgates': '0', 'canal_batepapo': '0', 'canal_log_taxas': '0',
+                'recompensa_voz': '1', 'limite_voz': '120',
+                'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60',
+                'recompensa_reacao': '50',
                 'recompensa_evento_bronze': '50', 'recompensa_evento_prata': '100', 'recompensa_evento_ouro': '200',
                 'limite_puxador_diario': '5'
             }
+
             for chave, valor in default_configs.items():
-                await self.bot.db_manager.execute_query("INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING", (chave, valor))
+                await self.bot.db_manager.execute_query("INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING", chave, valor)
             
-            await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", (1,))
+            # Garante que o Tesouro da Guilda (ID 1) existe
+            await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES (1, 0) ON CONFLICT (user_id) DO NOTHING")
+
             print("Base de dados Supabase verificada e pronta.")
         except Exception as e:
             print(f"❌ Ocorreu um erro ao inicializar a base de dados: {e}")
-            raise
+            raise e
 
     @commands.command(name='initdb')
     @commands.has_permissions(administrator=True)
     async def initdb(self, ctx):
         await ctx.send("A forçar a verificação da base de dados...")
-        await self.initialize_database_schema()
-        await ctx.send("✅ Verificação da base de dados concluída.")
+        try:
+            await self.initialize_database_schema()
+            await ctx.send("✅ Verificação da base de dados concluída.")
+        except Exception as e:
+            await ctx.send(f"❌ Falha ao inicializar a base de dados: {e}")
         
     async def create_and_pin(self, ctx, *, category, name, embed, overwrites=None, set_config_key=None):
         try:
@@ -99,9 +106,7 @@ class Admin(commands.Cog):
         
         await msg_progresso.edit(content="🔥 Estrutura antiga removida. A criar a nova...")
 
-        perm_nivel_4_id_str = await self.bot.db_manager.get_config_value('perm_nivel_4', '0')
-        perm_nivel_4_id = int(perm_nivel_4_id_str)
-        perm_nivel_4_role = guild.get_role(perm_nivel_4_id)
+        perm_nivel_4_role = guild.get_role(int(await self.bot.db_manager.get_config_value('perm_nivel_4', '0')))
         admin_overwrites = { 
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             guild.me: discord.PermissionOverwrite(view_channel=True)
@@ -195,7 +200,7 @@ class Admin(commands.Cog):
     @commands.group(name="definircanal", invoke_without_command=True)
     @check_permission_level(4)
     async def definir_canal(self, ctx):
-        await ctx.send("Use `!definircanal <tipo> #canal`. Tipos: `anuncios`, `batepapo`.")
+        await ctx.send("Use `!definircanal <tipo> #canal`. Tipos: `anuncios`, `batepapo`, `logtaxas`.")
     
     @definir_canal.command(name="anuncios")
     async def definir_canal_anuncios(self, ctx, canal: discord.TextChannel):
@@ -206,11 +211,19 @@ class Admin(commands.Cog):
     async def definir_canal_batepapo(self, ctx, canal: discord.TextChannel):
         await self.bot.db_manager.set_config_value("canal_batepapo", str(canal.id))
         await ctx.send(f"✅ O canal de bate-papo para mensagens de engajamento foi definido como {canal.mention}.")
+    
+    @definir_canal.command(name="logtaxas")
+    async def definir_canal_logtaxas(self, ctx, canal: discord.TextChannel):
+        await self.bot.db_manager.set_config_value("canal_log_taxas", str(canal.id))
+        await ctx.send(f"✅ O canal de logs das taxas foi definido como {canal.mention}.")
 
     @commands.command(name="anunciar")
     @check_permission_level(3)
     async def anunciar(self, ctx, tipo_canal: str, *, mensagem: str):
-        tipos_validos = {"mercado": "canal_mercado", "batepapo": "canal_batepapo"}
+        tipos_validos = {
+            "mercado": "canal_mercado",
+            "batepapo": "canal_batepapo"
+        }
         if tipo_canal.lower() not in tipos_validos:
             return await ctx.send("❌ Tipo de canal inválido. Use `mercado` ou `batepapo`.")
         
@@ -244,7 +257,7 @@ class Admin(commands.Cog):
         if valor < 0:
             return await ctx.send("❌ O valor do lastro não pode ser negativo.")
         await self.bot.db_manager.set_config_value('lastro_total_prata', str(valor))
-        await ctx.send(f"✅ Lastro total de prata definido para **{valor:,}** 🥈.")
+        await ctx.send(f"✅ Lastro total de prata definido para **{valor:,}** 🥈.".replace(',', '.'))
 
     @commands.command(name="definir-taxa-conversao")
     @check_permission_level(4)
@@ -252,7 +265,8 @@ class Admin(commands.Cog):
         if valor <= 0:
             return await ctx.send("❌ A taxa de conversão deve ser um valor positivo.")
         await self.bot.db_manager.set_config_value('taxa_conversao_prata', str(valor))
-        await ctx.send(f"✅ Taxa de conversão definida para 1 🪙 = **{valor:,}** 🥈.")
+        await ctx.send(f"✅ Taxa de conversão definida para **1 🪙 = {valor:,} 🥈**.".replace(',', '.'))
+
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))
