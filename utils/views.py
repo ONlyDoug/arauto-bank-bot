@@ -15,14 +15,14 @@ class OrbeAprovacaoView(discord.ui.View):
         
         try:
             submissao = await db_manager.execute_query(
-                "SELECT autor_id, membros, valor_total FROM submissoes_orbe WHERE message_id = %s",
-                (interaction.message.id,),
+                "SELECT autor_id, membros, valor_total FROM submissoes_orbe WHERE message_id = $1",
+                interaction.message.id,
                 fetch="one"
             )
             if not submissao:
                 return await interaction.response.send_message("Submissão não encontrada na base de dados.", ephemeral=True)
 
-            autor_id, membros_str, valor_total = submissao
+            autor_id, membros_str, valor_total = submissao['autor_id'], submissao['membros'], submissao['valor_total']
             membros_ids = [int(id_str) for id_str in membros_str.split(',')]
             
             if novo_status == "aprovado":
@@ -32,8 +32,8 @@ class OrbeAprovacaoView(discord.ui.View):
                     await economia_cog.depositar(user_id, recompensa_individual, f"Recompensa de Orbe aprovada por {interaction.user.name}")
             
             await db_manager.execute_query(
-                "UPDATE submissoes_orbe SET status = %s WHERE message_id = %s",
-                (novo_status, interaction.message.id)
+                "UPDATE submissoes_orbe SET status = $1 WHERE message_id = $2",
+                novo_status, interaction.message.id
             )
 
             embed = interaction.message.embeds[0]
@@ -77,24 +77,26 @@ class TaxaPrataView(discord.ui.View):
         
         try:
             submissao = await db_manager.execute_query(
-                "SELECT user_id FROM submissoes_taxa WHERE message_id = %s",
-                (interaction.message.id,),
+                "SELECT user_id FROM submissoes_taxa WHERE message_id = $1",
+                interaction.message.id,
                 fetch="one"
             )
             if not submissao:
                 return await interaction.response.send_message("Submissão não encontrada.", ephemeral=True)
 
-            user_id = submissao[0]
+            user_id = submissao['user_id']
             membro = interaction.guild.get_member(user_id)
             
             if novo_status == "aprovado" and membro:
                 taxas_cog = self.bot.get_cog('Taxas')
-                await taxas_cog.regularizar_membro(membro)
-                await db_manager.execute_query("UPDATE taxas SET status = 'pago_prata' WHERE user_id = %s", (user_id,))
+                # A função regularizar membro precisa dos configs para funcionar
+                configs = await db_manager.get_all_configs(['cargo_membro', 'cargo_inadimplente'])
+                await taxas_cog.regularizar_membro(membro, configs)
+                await db_manager.execute_query("UPDATE taxas SET status = 'pago_prata' WHERE user_id = $1", user_id)
 
             await db_manager.execute_query(
-                "UPDATE submissoes_taxa SET status = %s WHERE message_id = %s",
-                (novo_status, interaction.message.id)
+                "UPDATE submissoes_taxa SET status = $1 WHERE message_id = $2",
+                novo_status, interaction.message.id
             )
 
             embed = interaction.message.embeds[0]

@@ -29,7 +29,7 @@ class Admin(commands.Cog):
             
             default_configs = {
                 'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
-                'taxa_semanal_valor': '500', 'taxa_semanal_dia': '6', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
+                'taxa_semanal_valor': '500', 'taxa_dia_semana': '6', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
                 'perm_nivel_1': '0', 'perm_nivel_2': '0', 'perm_nivel_3': '0', 'perm_nivel_4': '0',
                 'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
                 'canal_resgates': '0', 'canal_batepapo': '0', 'canal_log_taxas': '0',
@@ -43,8 +43,7 @@ class Admin(commands.Cog):
             for chave, valor in default_configs.items():
                 await self.bot.db_manager.execute_query("INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING", chave, valor)
             
-            # Garante que o Tesouro da Guilda (ID 1) existe
-            await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES (1, 0) ON CONFLICT (user_id) DO NOTHING")
+            await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", 1)
 
             print("Base de dados Supabase verificada e pronta.")
         except Exception as e:
@@ -149,7 +148,7 @@ class Admin(commands.Cog):
         await asyncio.sleep(1.5)
 
         embed = discord.Embed(title="ℹ️｜Como Funciona a Taxa", description="A taxa semanal é um sistema automático que ajuda a financiar os projetos e as atividades da guilda.", color=0x7f8c8d)
-        embed.add_field(name="Como funciona?", value="Uma vez por semana, o bot tenta debitar automaticamente o valor da taxa do seu `!saldo`. Se não tiver saldo, o seu cargo será temporariamente alterado.", inline=False)
+        embed.add_field(name="Como funciona?", value="Uma vez por semana, o bot irá verificar a sua situação. Se estiver inadimplente, o seu cargo será temporariamente alterado, restringindo o seu acesso.", inline=False)
         embed.add_field(name="Como Regularizar?", value="Vá ao canal `🪙｜pagamento-de-taxas` e use `!pagar-taxa` ou `!paguei-prata`.", inline=False)
         await self.create_and_pin(ctx, category=cat_taxas, name="ℹ️｜como-funciona-a-taxa", embed=embed, overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
         
@@ -165,11 +164,14 @@ class Admin(commands.Cog):
         embed = discord.Embed(title="✅｜Aprovações", description="Este canal é para uso exclusivo da staff. Aqui aparecerão todas as submissões de orbes e pagamentos de taxa.", color=0xf1c40f)
         await self.create_and_pin(ctx, category=cat_admin, name="✅｜aprovações", embed=embed, set_config_key='canal_aprovacao')
 
-        embed = discord.Embed(title="🚨｜Resgates Staff", description="Este canal notifica a equipa financeira sempre que um resgate de moedas por prata é processado.", color=0xe74c3c)
+        embed = discord.Embed(title="🚨｜Resgates Staff", description="Este canal notifica a equipa financeira sempre que um resgate de moedas por prata é processado ou um item é comprado na loja.", color=0xe74c3c)
         await self.create_and_pin(ctx, category=cat_admin, name="🚨｜resgates-staff", embed=embed, set_config_key='canal_resgates')
 
         embed = discord.Embed(title="🔩｜Comandos Admin", description="Utilize este canal para todos os comandos de gestão e configuração do bot.", color=0xe67e22)
         await self.create_and_pin(ctx, category=cat_admin, name="🔩｜comandos-admin", embed=embed)
+        
+        embed = discord.Embed(title="📊｜Logs de Taxas", description="Este canal regista todas as ações automáticas do ciclo de taxas.", color=0x546e7a)
+        await self.create_and_pin(ctx, category=cat_admin, name="📊｜logs-de-taxas", embed=embed, set_config_key='canal_log_taxas')
         
         await msg_progresso.edit(content="✅ Estrutura de canais final criada e configurada com sucesso!")
 
@@ -270,4 +272,3 @@ class Admin(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Admin(bot))
-
