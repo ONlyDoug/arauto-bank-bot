@@ -166,9 +166,8 @@ class Taxas(commands.Cog):
         try:
             msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
             
-            # CORREÇÃO: Simplificada a query ON CONFLICT
             await self.bot.db_manager.execute_query(
-                "INSERT INTO submissoes_taxa (message_id, user_id, status, url_imagem) VALUES ($1, $2, $3, $4) ON CONFLICT (message_id) DO UPDATE SET status = EXCLUDED.status, url_imagem = EXCLUDED.url_imagem",
+                "INSERT INTO submissoes_taxa (message_id, user_id, status, url_imagem) VALUES ($1, $2, $3, $4) ON CONFLICT (message_id) DO UPDATE SET user_id = EXCLUDED.user_id, status = EXCLUDED.status, url_imagem = EXCLUDED.url_imagem",
                 msg_aprovacao.id, ctx.author.id, 'pendente', imagem.url
             )
 
