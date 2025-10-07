@@ -166,9 +166,13 @@ class Taxas(commands.Cog):
         try:
             msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
             
-            # CORREÇÃO APLICADA: A coluna 'url_imagem' foi removida desta query para evitar o erro.
+            # CORREÇÃO: Substituído ON CONFLICT por DELETE e INSERT para maior robustez.
             await self.bot.db_manager.execute_query(
-                "INSERT INTO submissoes_taxa (message_id, user_id, status) VALUES ($1, $2, $3) ON CONFLICT (message_id) DO UPDATE SET user_id = EXCLUDED.user_id, status = EXCLUDED.status",
+                "DELETE FROM submissoes_taxa WHERE message_id = $1",
+                msg_aprovacao.id
+            )
+            await self.bot.db_manager.execute_query(
+                "INSERT INTO submissoes_taxa (message_id, user_id, status) VALUES ($1, $2, $3)",
                 msg_aprovacao.id, ctx.author.id, 'pendente'
             )
 
@@ -204,5 +208,6 @@ class Taxas(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(Taxas(bot))
+
 
 
