@@ -25,7 +25,7 @@ class Admin(commands.Cog):
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS loja (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS renda_passiva_log (user_id BIGINT, tipo TEXT, data DATE, valor INTEGER, PRIMARY KEY (user_id, tipo, data))")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS submissoes_taxa (message_id BIGINT PRIMARY KEY, user_id BIGINT, status TEXT)")
-            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS eventos_criados_log (criador_id BIGINT, data DATE, quantidade INTEGER, PRIMARY KEY (criador_id, data))")
+            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS puxadas_log (puxador_id BIGINT, data DATE, quantidade INTEGER, PRIMARY KEY (puxador_id, data))")
             
             default_configs = {
                 'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
@@ -36,8 +36,8 @@ class Admin(commands.Cog):
                 'recompensa_voz': '1', 'limite_voz': '120',
                 'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60',
                 'recompensa_reacao': '50',
-                'recompensa_evento_bronze': '50', 'recompensa_evento_prata': '100', 'recompensa_evento_ouro': '200',
-                'limite_puxador_diario': '5'
+                'recompensa_puxar_bronze': '100', 'recompensa_puxar_ouro': '250',
+                'limite_puxadas_diario': '5'
             }
 
             for chave, valor in default_configs.items():
@@ -178,7 +178,7 @@ class Admin(commands.Cog):
     @commands.group(name="cargo", invoke_without_command=True)
     @check_permission_level(4)
     async def cargo(self, ctx):
-        await ctx.send("Comandos disponíveis: `!cargo definir <tipo> <@cargo>` e `!cargo permissao <nível> <@cargo>`")
+        await ctx.send("Comandos disponíveis: `!cargo definir <tipo> <@cargo>` e `!cargo permissao <nível> <@cargo(s)>`")
 
     @cargo.command(name="definir")
     async def cargo_definir(self, ctx, tipo: str, cargo: discord.Role):
@@ -191,13 +191,19 @@ class Admin(commands.Cog):
         await ctx.send(f"✅ O cargo **{tipo.capitalize()}** foi definido como {cargo.mention}.")
 
     @cargo.command(name="permissao")
-    async def cargo_permissao(self, ctx, nivel: int, cargo: discord.Role):
+    async def cargo_permissao(self, ctx, nivel: int, cargos: commands.Greedy[discord.Role]):
         if not 1 <= nivel <= 4:
             return await ctx.send("❌ O nível de permissão deve ser entre 1 e 4.")
+        if not cargos:
+            return await ctx.send("❌ Você precisa de mencionar pelo menos um cargo.")
         
+        # Converte a lista de cargos para uma string de IDs separados por vírgula
+        ids_cargos_str = ",".join(str(c.id) for c in cargos)
         chave = f"perm_nivel_{nivel}"
-        await self.bot.db_manager.set_config_value(chave, str(cargo.id))
-        await ctx.send(f"✅ O cargo {cargo.mention} foi associado ao **Nível de Permissão {nivel}**.")
+        await self.bot.db_manager.set_config_value(chave, ids_cargos_str)
+
+        mencoes_cargos = ", ".join(c.mention for c in cargos)
+        await ctx.send(f"✅ Os cargos {mencoes_cargos} foram associados ao **Nível de Permissão {nivel}**.")
     
     @commands.group(name="definircanal", invoke_without_command=True)
     @check_permission_level(4)
@@ -285,6 +291,28 @@ class Admin(commands.Cog):
         await self.bot.db_manager.set_config_value('taxa_conversao_prata', str(valor))
         await ctx.send(f"✅ Taxa de conversão definida para **1 🪙 = {valor:,} 🥈**.".replace(',', '.'))
 
+    @commands.command(name="definir-recompensa-puxar")
+    @check_permission_level(4)
+    async def definir_recompensa_puxar(self, ctx, tier: str, valor: int):
+        tier_lower = tier.lower()
+        if tier_lower not in ['bronze', 'ouro']:
+            return await ctx.send("❌ Tier inválido. Use `bronze` ou `ouro`.")
+        if valor < 0:
+            return await ctx.send("❌ O valor da recompensa não pode ser negativo.")
+
+        chave = f"recompensa_puxar_{tier_lower}"
+        await self.bot.db_manager.set_config_value(chave, str(valor))
+        await ctx.send(f"✅ Recompensa para puxadas do tier **{tier.capitalize()}** definida para **{valor}** moedas.")
+
+    @commands.command(name="definir-limite-puxadas")
+    @check_permission_level(4)
+    async def definir_limite_puxadas(self, ctx, limite: int):
+        if limite < 0:
+            return await ctx.send("❌ O limite não pode ser negativo.")
+        
+        await self.bot.db_manager.set_config_value('limite_puxadas_diario', str(limite))
+        await ctx.send(f"✅ Limite diário de puxadas por membro definido para **{limite}**.")
+
     @commands.command(name="verificarconfig")
     @check_permission_level(4)
     async def verificar_config(self, ctx):
@@ -317,9 +345,13 @@ class Admin(commands.Cog):
         permissao_desc = ""
         for i in range(1, 5):
             chave = f'perm_nivel_{i}'
-            role_id = int(configs.get(chave, '0'))
-            role = ctx.guild.get_role(role_id) if role_id != 0 else None
-            status = role.mention if role else "⚠️ **Não definido**"
+            role_ids_str = configs.get(chave, '')
+            if role_ids_str:
+                role_ids = [int(id_str) for id_str in role_ids_str.split(',')]
+                roles = [ctx.guild.get_role(rid) for rid in role_ids if ctx.guild.get_role(rid)]
+                status = ", ".join(r.mention for r in roles) if roles else "⚠️ **Cargos não encontrados**"
+            else:
+                status = "⚠️ **Não definido**"
             permissao_desc += f"**Permissão Nível {i}:** {status}\n"
         embed.add_field(name="Hierarquia de Permissões", value=permissao_desc, inline=False)
 

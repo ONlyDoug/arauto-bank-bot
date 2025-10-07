@@ -4,28 +4,29 @@ def check_permission_level(level: int):
     async def predicate(ctx_or_interaction):
         if isinstance(ctx_or_interaction, commands.Context):
             user = ctx_or_interaction.author
-            channel = ctx_or_interaction.channel
             bot = ctx_or_interaction.bot
         else: # Is an Interaction
             user = ctx_or_interaction.user
-            channel = ctx_or_interaction.channel
             bot = ctx_or_interaction.client
 
         if user.guild_permissions.administrator:
             return True
         
         author_roles_ids = {str(role.id) for role in user.roles}
-        
+        db_manager = bot.db_manager
+
         for i in range(level, 5):
             perm_key = f'perm_nivel_{i}'
-            db_manager = bot.db_manager
-            role_id_str = await db_manager.get_config_value(perm_key, '0')
-            if role_id_str in author_roles_ids:
-                return True
+            # Agora buscamos uma lista de IDs, separada por vírgulas
+            role_ids_str = await db_manager.get_config_value(perm_key, '')
+            if role_ids_str:
+                allowed_role_ids = set(role_ids_str.split(','))
+                # Se qualquer um dos cargos do autor estiver na lista de permissões, retorna True
+                if not author_roles_ids.isdisjoint(allowed_role_ids):
+                    return True
         
         if isinstance(ctx_or_interaction, commands.Context):
-            # Não enviamos mais mensagens de erro daqui para evitar spam. O check global já trata disso.
-            pass
+            pass # O erro é tratado globalmente
         else:
             await ctx_or_interaction.response.send_message("Você não tem permissão para executar esta ação.", ephemeral=True, delete_after=10)
 

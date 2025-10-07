@@ -1,14 +1,60 @@
 import discord
 from discord.ext import commands
 from utils.permissions import check_permission_level
+from datetime import datetime, date
 
 class Eventos(commands.Cog):
     """Cog para gerir a criação e participação em eventos."""
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command(name='criarevento')
+    @commands.command(name='puxar')
     @check_permission_level(1)
+    async def puxar_evento(self, ctx, tier: str, *, nome: str):
+        """Cria um evento rápido com recompensa pré-definida."""
+        tier_lower = tier.lower()
+        if tier_lower not in ['bronze', 'ouro']:
+            return await ctx.send("❌ Tier inválido. Use `bronze` ou `ouro`.")
+
+        # Verificar limite diário de puxadas
+        limite_diario_str = await self.bot.db_manager.get_config_value('limite_puxadas_diario', '5')
+        limite_diario = int(limite_diario_str)
+        
+        hoje = date.today()
+        puxadas_hoje = await self.bot.db_manager.execute_query(
+            "SELECT quantidade FROM puxadas_log WHERE puxador_id = $1 AND data = $2",
+            ctx.author.id, hoje, fetch="one"
+        )
+        
+        quantidade_puxadas = puxadas_hoje['quantidade'] if puxadas_hoje else 0
+        if quantidade_puxadas >= limite_diario:
+            return await ctx.send(f"❌ Você já atingiu o seu limite de **{limite_diario}** puxadas de eventos hoje.")
+
+        # Obter recompensa do tier
+        recompensa_str = await self.bot.db_manager.get_config_value(f'recompensa_puxar_{tier_lower}', '0')
+        recompensa = int(recompensa_str)
+
+        if recompensa == 0:
+            return await ctx.send(f"⚠️ A recompensa para o tier '{tier.capitalize()}' não está configurada.")
+        
+        # Criar o evento com meta padrão de 1 participação
+        meta = 1
+        resultado = await self.bot.db_manager.execute_query(
+            "INSERT INTO eventos (nome, recompensa, meta_participacao, criador_id) VALUES ($1, $2, $3, $4) RETURNING id",
+            f"[{tier.capitalize()}] {nome}", recompensa, meta, ctx.author.id, fetch="one"
+        )
+        evento_id = resultado['id']
+
+        # Atualizar log de puxadas
+        await self.bot.db_manager.execute_query(
+            "INSERT INTO puxadas_log (puxador_id, data, quantidade) VALUES ($1, $2, 1) ON CONFLICT (puxador_id, data) DO UPDATE SET quantidade = puxadas_log.quantidade + 1",
+            ctx.author.id, hoje
+        )
+        
+        await ctx.send(f"✅ Evento **'{nome}'** (Tier: {tier.capitalize()}, ID: {evento_id}) criado com sucesso! Recompensa: **{recompensa}** moedas.")
+
+    @commands.command(name='criarevento')
+    @check_permission_level(2) # Permissão elevada para Nível 2
     async def criar_evento(self, ctx, recompensa: int, meta: int, *, nome: str):
         if recompensa <= 0 or meta <= 0:
             return await ctx.send("A recompensa e a meta devem ser valores positivos.")
