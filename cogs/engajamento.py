@@ -48,7 +48,9 @@ class Engajamento(commands.Cog):
             for guild in self.bot.guilds:
                 for channel in guild.voice_channels:
                     for member in channel.members:
-                        if member.bot or member.voice.self_deaf or member.voice.self_mute:
+                        # --- CORREÇÃO DE BUG ---
+                        # Adiciona uma verificação para garantir que member.voice existe
+                        if member.bot or not member.voice or member.voice.self_deaf or member.voice.self_mute:
                             continue
                         
                         try:
@@ -115,20 +117,24 @@ class Engajamento(commands.Cog):
             if recompensa_reacao == 0 or str(payload.channel_id) != canal_anuncios_id:
                 return
             
-            transacao_existente = await self.bot.db_manager.execute_query(
-                "SELECT 1 FROM transacoes WHERE user_id = $1 AND descricao = $2",
-                payload.user_id, f"Recompensa por reagir ao anúncio {payload.message_id}",
-                fetch="one"
-            )
-            if transacao_existente:
+            # --- LÓGICA DE CORREÇÃO DA EXPLOIT ---
+            # Tenta inserir na nova tabela. Se a reação já existir, a query falhará silenciosamente.
+            try:
+                await self.bot.db_manager.execute_query(
+                    "INSERT INTO reacoes_anuncios (user_id, message_id) VALUES ($1, $2)",
+                    payload.user_id, payload.message_id
+                )
+            except Exception:
+                # Ocorreu um erro de violação de chave primária, o que significa que o user já reagiu.
+                # Podemos simplesmente ignorar e não dar a recompensa.
                 return
-            
+
             economia_cog = self.bot.get_cog('Economia')
             await economia_cog.transferir_do_tesouro(payload.user_id, recompensa_reacao, f"Recompensa por reagir ao anúncio {payload.message_id}")
             await self.registrar_renda_passiva(payload.user_id, 'reacao', recompensa_reacao)
+        
         except Exception as e:
             print(f"Erro em on_raw_reaction_add para {payload.user_id}: {e}")
-
 
     @tasks.loop(hours=4)
     async def enviar_mensagem_engajamento(self):

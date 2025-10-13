@@ -96,14 +96,37 @@ class ArautoBankBot(commands.Bot):
         print(f'Login bem-sucedido como {self.user.name} (ID: {self.user.id})')
         print('------')
 
+    # --- ATUALIZAÇÃO IMPORTANTE ---
+    # Gestor de erros melhorado com mensagens personalizadas
     async def on_command_error(self, ctx, error):
+        # Ignora erros que não queremos reportar (comando não encontrado, falha de permissão)
         if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
             return
+
+        # Erro para quando faltam argumentos
         if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.send(f"❌ Faltam argumentos para o comando `{ctx.command.name}`. Verifique a ajuda se necessário.", delete_after=10)
-        else:
-            print(f"Erro num comando: {ctx.command}: {error}")
-            # await ctx.send("Ocorreu um erro inesperado ao executar este comando.", delete_after=10)
+            await ctx.message.delete()
+            await ctx.send(
+                f"🙄 {ctx.author.mention}, a sério? Faltou-me dizer que o comando `!{ctx.command.name}` precisa de mais alguma coisa. "
+                f"Adivinho eu o que é? Ajuda-me a ajudar-te e completa o comando.",
+                delete_after=15
+            )
+            return
+
+        # Erro para quando o tipo de argumento está errado (ex: texto em vez de número)
+        if isinstance(error, commands.BadArgument):
+            await ctx.message.delete()
+            await ctx.send(
+                f"😒 {ctx.author.mention}, parece que te baralhaste nas palavras e nos números. "
+                f"O comando `!{ctx.command.name}` não estava à espera disso. Vê lá se não estás a tentar pagar a taxa com um poema.",
+                delete_after=15
+            )
+            return
+
+        # Para todos os outros erros, regista no log para análise
+        print(f"Erro num comando: {ctx.command}: {error}")
+        # Descomente a linha abaixo se quiser notificar o utilizador de erros inesperados
+        # await ctx.send("💥 Ups! Algo correu mal nos bastidores. A equipa técnica já está a usar um martelo para resolver.", delete_after=10)
 
 
 # --- Iniciar o Bot ---

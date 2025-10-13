@@ -27,6 +27,10 @@ class Admin(commands.Cog):
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS submissoes_taxa (message_id BIGINT PRIMARY KEY, user_id BIGINT, status TEXT)")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS puxadas_log (puxador_id BIGINT, data DATE, quantidade INTEGER, PRIMARY KEY (puxador_id, data))")
             
+            # --- ADIÇÃO IMPORTANTE ---
+            # Nova tabela para garantir que a recompensa por reação é única por mensagem
+            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS reacoes_anuncios (user_id BIGINT, message_id BIGINT, PRIMARY KEY (user_id, message_id))")
+            
             default_configs = {
                 'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
                 'taxa_semanal_valor': '500', 'taxa_dia_semana': '6', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
