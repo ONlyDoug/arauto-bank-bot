@@ -24,27 +24,17 @@ intents.reactions = True
 
 # --- CHECK GLOBAL PARA RESTRIÇÃO DE CANAIS (LÓGICA FINAL) ---
 async def global_channel_check(ctx):
-    # Admins podem usar qualquer comando em qualquer lugar.
     if ctx.author.guild_permissions.administrator:
         return True
-    
-    # O comando !setup é uma exceção para admins.
-    if ctx.command and ctx.command.name == 'setup':
+    if ctx.command and ctx.command.name in ['setup', 'ajuda']:
         return True
-    
-    # Para outros, o comando só funciona nas categorias permitidas.
     if ctx.guild and ctx.channel.category and ctx.channel.category.name in ctx.bot.allowed_categories:
         return True
-        
-    # Bloqueia silenciosamente noutros canais de texto do servidor.
     if ctx.guild:
-        # Apenas envia mensagem de erro se o comando for encontrado
         if ctx.command is not None:
-             await ctx.message.delete()
-             await ctx.send(f"❌ {ctx.author.mention}, este comando só pode ser usado nos canais do **Arauto Bank**.", delete_after=10)
+            await ctx.message.delete()
+            await ctx.send(f"❌ {ctx.author.mention}, este comando só pode ser usado nos canais do **Arauto Bank**.", delete_after=10)
         return False
-
-    # Permite comandos em DMs (mensagens privadas).
     return True
 
 class ArautoBankBot(commands.Bot):
@@ -52,8 +42,10 @@ class ArautoBankBot(commands.Bot):
         super().__init__(command_prefix='!', intents=intents, case_insensitive=True)
         self.db_manager = DatabaseManager(dsn=DATABASE_URL)
         self.allowed_categories = ["🏦 ARAUTO BANK", "💸 TAXA SEMANAL", "⚙️ ADMINISTRAÇÃO"]
-        
-        # Adiciona o check global ao bot
+
+        # --- ATUALIZAÇÃO IMPORTANTE ---
+        # Remove o comando de ajuda padrão
+        self.remove_command('help')
         self.add_check(global_channel_check)
 
     async def setup_hook(self):
@@ -64,7 +56,6 @@ class ArautoBankBot(commands.Bot):
         self.add_view(TaxaPrataView(self))
         print("Vistas persistentes registadas.")
 
-        # Carrega o Admin Cog primeiro para garantir que a DB está pronta
         try:
             await self.load_extension('cogs.admin')
             admin_cog = self.get_cog('Admin')
@@ -72,62 +63,51 @@ class ArautoBankBot(commands.Bot):
                 print("A inicializar o esquema da base de dados...")
                 await admin_cog.initialize_database_schema()
             else:
-                 raise Exception("Não foi possível carregar o Cog de Admin.")
+                raise Exception("Não foi possível carregar o Cog de Admin.")
         except Exception as e:
             print(f"ERRO CRÍTICO ao carregar ou inicializar o Admin Cog: {e}")
             return
 
-        # Carrega os outros cogs
+        # --- ATUALIZAÇÃO IMPORTANTE ---
+        # Adiciona 'cogs.ajuda' à lista de cogs
         cogs_to_load = [
-            'cogs.economia', 'cogs.eventos', 'cogs.loja', 
+            'cogs.ajuda', 'cogs.economia', 'cogs.eventos', 'cogs.loja',
             'cogs.taxas', 'cogs.engajamento', 'cogs.orbes', 'cogs.utilidades'
         ]
 
-        for cog_name in cogs_to_load: 
+        for cog_name in cogs_to_load:
             try:
                 await self.load_extension(cog_name)
                 print(f"Cog '{cog_name}' carregado com sucesso.")
             except Exception as e:
                 print(f"ERRO ao carregar o cog '{cog_name}': {e}")
-        
+
         print("Setup_hook concluído.")
 
     async def on_ready(self):
         print(f'Login bem-sucedido como {self.user.name} (ID: {self.user.id})')
         print('------')
 
-    # --- ATUALIZAÇÃO IMPORTANTE ---
-    # Gestor de erros melhorado com mensagens personalizadas
     async def on_command_error(self, ctx, error):
-        # Ignora erros que não queremos reportar (comando não encontrado, falha de permissão)
         if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
             return
-
-        # Erro para quando faltam argumentos
         if isinstance(error, commands.MissingRequiredArgument):
             await ctx.message.delete()
             await ctx.send(
                 f"🙄 {ctx.author.mention}, a sério? Faltou-me dizer que o comando `!{ctx.command.name}` precisa de mais alguma coisa. "
-                f"Adivinho eu o que é? Ajuda-me a ajudar-te e completa o comando.",
+                f"Adivinho eu o que é? Ajuda-me a ajudar-te e completa o comando. Se tiveres dúvidas, usa `!ajuda {ctx.command.name}`.",
                 delete_after=15
             )
             return
-
-        # Erro para quando o tipo de argumento está errado (ex: texto em vez de número)
         if isinstance(error, commands.BadArgument):
             await ctx.message.delete()
             await ctx.send(
                 f"😒 {ctx.author.mention}, parece que te baralhaste nas palavras e nos números. "
-                f"O comando `!{ctx.command.name}` não estava à espera disso. Vê lá se não estás a tentar pagar a taxa com um poema.",
+                f"O comando `!{ctx.command.name}` não estava à espera disso. Vê lá se não estás a tentar pagar a taxa com um poema. Usa `!ajuda {ctx.command.name}` para veres um exemplo.",
                 delete_after=15
             )
             return
-
-        # Para todos os outros erros, regista no log para análise
         print(f"Erro num comando: {ctx.command}: {error}")
-        # Descomente a linha abaixo se quiser notificar o utilizador de erros inesperados
-        # await ctx.send("💥 Ups! Algo correu mal nos bastidores. A equipa técnica já está a usar um martelo para resolver.", delete_after=10)
-
 
 # --- Iniciar o Bot ---
 if __name__ == "__main__":

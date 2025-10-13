@@ -7,14 +7,17 @@ class Loja(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command(name='loja')
+    @commands.command(
+        name='loja',
+        help='Exibe todos os itens disponíveis para compra na loja da guilda. Veja as maravilhas que o seu suor pode comprar!'
+    )
     async def ver_loja(self, ctx):
         itens = await self.bot.db_manager.execute_query(
             "SELECT id, nome, preco, descricao FROM loja ORDER BY id ASC", fetch="all"
         )
-        
+
         if not itens:
-            return await ctx.send("A loja está vazia no momento.")
+            return await ctx.send("A loja está vazia no momento. A staff deve estar a dormir.")
 
         embed = discord.Embed(title="🛍️ Loja da Guilda", color=0x3498db)
         for item in itens:
@@ -24,22 +27,25 @@ class Loja(commands.Cog):
             )
         await ctx.send(embed=embed)
 
-    @commands.command(name='comprar')
+    @commands.command(
+        name='comprar',
+        help='Compra um item da loja usando o seu ID. Gaste com sabedoria!',
+        usage='!comprar 1'
+    )
     async def comprar_item(self, ctx, item_id: int):
         item = await self.bot.db_manager.execute_query(
             "SELECT nome, preco FROM loja WHERE id = $1", item_id, fetch="one"
         )
 
         if not item:
-            return await ctx.send("Item não encontrado.")
-            
+            return await ctx.send("Item não encontrado. Ou digitou o ID errado ou está a ver coisas.")
+
         nome_item, preco_item = item['nome'], item['preco']
         economia_cog = self.bot.get_cog('Economia')
-        
+
         try:
-            # Usa o método levantar do cog Economia para garantir a lógica centralizada de débito
             await economia_cog.levantar(ctx.author.id, preco_item, f"Compra na loja: {nome_item}")
-            
+
             canal_resgates_id_str = await self.bot.db_manager.get_config_value('canal_resgates', '0')
             if canal_resgates_id_str != '0':
                 canal = self.bot.get_channel(int(canal_resgates_id_str))
@@ -58,18 +64,17 @@ class Loja(commands.Cog):
             await ctx.send(f"✅ Você comprou **{nome_item}** por `{preco_item:,} GC`. A staff foi notificada para fazer a entrega.".replace(',', '.'))
         except ValueError as e:
             await ctx.send(f"❌ Erro: {e}")
-            
-    @commands.command(name='additem')
+
+    @commands.command(name='additem', hidden=True)
     @check_permission_level(4)
     async def add_item(self, ctx, preco: int, *, nome_e_descricao: str):
         if preco <= 0:
             return await ctx.send("O preço deve ser um valor positivo.")
-        
+
         partes = nome_e_descricao.split('|', 1)
         nome = partes[0].strip()
         descricao = partes[1].strip() if len(partes) > 1 else "Sem descrição."
 
-        # A query agora não precisa de ID, pois ele é SERIAL (auto-incremento)
         resultado = await self.bot.db_manager.execute_query(
             "INSERT INTO loja (nome, preco, descricao) VALUES ($1, $2, $3) RETURNING id",
             nome, preco, descricao, fetch="one"
@@ -77,7 +82,7 @@ class Loja(commands.Cog):
         novo_id = resultado['id']
         await ctx.send(f"✅ Item '{nome}' adicionado à loja com o **ID: {novo_id}**.")
 
-    @commands.command(name='delitem')
+    @commands.command(name='delitem', hidden=True)
     @check_permission_level(4)
     async def del_item(self, ctx, item_id: int):
         item_removido = await self.bot.db_manager.execute_query(

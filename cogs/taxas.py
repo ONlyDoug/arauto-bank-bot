@@ -15,7 +15,6 @@ class Taxas(commands.Cog):
         self.ciclo_semanal_taxas.cancel()
 
     async def regularizar_membro(self, membro: discord.Member, configs: dict):
-        """Função para remover o cargo de inadimplente e devolver o de membro."""
         cargo_inadimplente = membro.guild.get_role(int(configs.get('cargo_inadimplente', '0')))
         cargo_membro = membro.guild.get_role(int(configs.get('cargo_membro', '0')))
 
@@ -35,7 +34,6 @@ class Taxas(commands.Cog):
 
     @tasks.loop(time=time(hour=12, minute=0, tzinfo=datetime.now().astimezone().tzinfo))
     async def ciclo_semanal_taxas(self):
-        """Verifica diariamente se é o dia de executar o ciclo de taxas."""
         dia_semana_config_str = await self.bot.db_manager.get_config_value('taxa_dia_semana', '-1')
         dia_semana_config = int(dia_semana_config_str)
         hoje = datetime.now().weekday() # Segunda é 0, Domingo é 6
@@ -121,13 +119,16 @@ class Taxas(commands.Cog):
         await self.bot.wait_until_ready()
         print("Tarefa do ciclo de taxas está pronta e a aguardar a hora certa.")
 
-    @commands.command(name="pagar-taxa")
+    @commands.command(
+        name="pagar-taxa",
+        help='Paga a sua taxa semanal em atraso usando o seu saldo de moedas. Isto restaura o seu acesso aos canais da guilda.'
+    )
     async def pagar_taxa(self, ctx):
         configs = await self.bot.db_manager.get_all_configs(['taxa_semanal_valor', 'cargo_membro', 'cargo_inadimplente'])
         valor_taxa = int(configs.get('taxa_semanal_valor', 0))
 
         if valor_taxa == 0:
-            return await ctx.send("O sistema de taxas não está configurado.")
+            return await ctx.send("O sistema de taxas não está configurado. Sorte a sua!")
 
         economia_cog = self.bot.get_cog('Economia')
         try:
@@ -136,21 +137,24 @@ class Taxas(commands.Cog):
             await self.bot.db_manager.execute_query(
                 "UPDATE taxas SET status = 'pago' WHERE user_id = $1", ctx.author.id
             )
-            await ctx.send("✅ Taxa paga com sucesso! O seu acesso foi restaurado.")
+            await ctx.send("✅ Taxa paga com sucesso! O seu acesso foi restaurado. Bem-vindo de volta, capitalista!")
         except ValueError:
-            await ctx.send("❌ Você não tem saldo suficiente para pagar a taxa.")
+            await ctx.send(f"❌ Você não tem saldo suficiente. A taxa custa **{valor_taxa}** moedas e você parece estar... 'economicamente desfavorecido'.")
 
-    @commands.command(name="paguei-prata")
+    @commands.command(
+        name="paguei-prata",
+        help='Inicia o processo de pagamento da taxa com prata do jogo. Tem de anexar um print do comprovativo de pagamento na mesma mensagem.'
+    )
     async def paguei_prata(self, ctx):
         if not ctx.message.attachments or not ctx.message.attachments[0].content_type.startswith('image/'):
-            return await ctx.send("❌ Você precisa de anexar um print (imagem) do comprovativo de pagamento.", delete_after=15)
+            return await ctx.send("❌ Olá? O print? Anexe a imagem do comprovativo de pagamento para eu poder enviar para a staff.", delete_after=15)
 
         imagem = ctx.message.attachments[0]
         canal_aprovacao_id_str = await self.bot.db_manager.get_config_value('canal_aprovacao', '0')
         canal_aprovacao = self.bot.get_channel(int(canal_aprovacao_id_str))
 
         if not canal_aprovacao:
-            return await ctx.send("⚠️ O canal de aprovações não foi configurado. Contacte um administrador.")
+            return await ctx.send("⚠️ O canal de aprovações não foi configurado. Contacte um administrador. A sua prata está no limbo por agora.")
         
         embed = discord.Embed(
             title="🧾 Pagamento de Taxa em Prata",
@@ -166,7 +170,6 @@ class Taxas(commands.Cog):
         try:
             msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
             
-            # CORREÇÃO: Substituído ON CONFLICT por DELETE e INSERT para maior robustez.
             await self.bot.db_manager.execute_query(
                 "DELETE FROM submissoes_taxa WHERE message_id = $1",
                 msg_aprovacao.id
@@ -177,13 +180,14 @@ class Taxas(commands.Cog):
             )
 
             await ctx.message.add_reaction("✅")
-            await ctx.send("✅ Comprovativo enviado para análise! A sua situação será regularizada assim que um staff aprovar.", delete_after=15)
+            await ctx.send("✅ Comprovativo enviado para análise! Agora aguente a ansiedade até um staff aprovar.", delete_after=15)
         
         except Exception as e:
             await ctx.send("❌ Ocorreu um erro ao enviar o seu comprovativo.")
             print(f"Erro no comando paguei-prata: {e}")
 
-    @commands.command(name="definir-taxa")
+    # Comandos de staff ficam escondidos
+    @commands.command(name="definir-taxa", hidden=True)
     @check_permission_level(4)
     async def definir_taxa(self, ctx, valor: int):
         if valor < 0:
@@ -191,7 +195,7 @@ class Taxas(commands.Cog):
         await self.bot.db_manager.set_config_value('taxa_semanal_valor', str(valor))
         await ctx.send(f"✅ Valor da taxa semanal definido para **{valor}** moedas.")
         
-    @commands.command(name="definir-taxa-dia")
+    @commands.command(name="definir-taxa-dia", hidden=True)
     @check_permission_level(4)
     async def definir_taxa_dia(self, ctx, dia_da_semana: int):
         if not 0 <= dia_da_semana <= 6:
@@ -200,7 +204,7 @@ class Taxas(commands.Cog):
         await self.bot.db_manager.set_config_value('taxa_dia_semana', str(dia_da_semana))
         await ctx.send(f"✅ O ciclo de taxas foi agendado para ser executado todas as **{dias[dia_da_semana]}**.")
 
-    @commands.command(name="forcar-taxa")
+    @commands.command(name="forcar-taxa", hidden=True)
     @check_permission_level(4)
     async def forcar_taxa(self, ctx):
         await ctx.send("🔥 A forçar a execução do ciclo de taxas... Isto pode demorar um pouco.")

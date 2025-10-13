@@ -8,7 +8,12 @@ class Eventos(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command(name='puxar')
+    @commands.command(
+        name='puxar',
+        help='Cria um evento rápido (puxada) com recompensa e meta pré-definidas. Exclusivo para Puxadores de conteúdo.',
+        usage='!puxar ouro Gank em Lymhurst',
+        hidden=True # Esconde este comando da ajuda geral, pois é para um grupo específico
+    )
     @check_permission_level(1)
     async def puxar_evento(self, ctx, tier: str, *, nome: str):
         """Cria um evento rápido com recompensa pré-definida."""
@@ -53,8 +58,48 @@ class Eventos(commands.Cog):
         
         await ctx.send(f"✅ Evento **'{nome}'** (Tier: {tier.capitalize()}, ID: {evento_id}) criado com sucesso! Recompensa: **{recompensa}** moedas.")
 
-    @commands.command(name='criarevento')
-    @check_permission_level(2) # Permissão elevada para Nível 2
+    @commands.command(
+        name='listareventos',
+        help='Mostra uma lista de todos os eventos e missões que estão a decorrer na guilda.'
+    )
+    async def listar_eventos(self, ctx):
+        eventos = await self.bot.db_manager.execute_query(
+            "SELECT id, nome, recompensa, meta_participacao FROM eventos WHERE ativo = TRUE", fetch="all"
+        )
+
+        if not eventos:
+            return await ctx.send("Não há eventos ativos no momento. Que tédio...")
+
+        embed = discord.Embed(title="🏆 Eventos Ativos", color=0xe91e63)
+        for evento in eventos:
+            embed.add_field(
+                name=f"ID: {evento['id']} - {evento['nome']}",
+                value=f"Recompensa: `{evento['recompensa']} GC` | Meta: `{evento['meta_participacao']} participações`",
+                inline=False
+            )
+        await ctx.send(embed=embed)
+
+    @commands.command(
+        name='participar',
+        help='Inscreve-se num evento ativo usando o ID do mesmo. Não fiques de fora!',
+        usage='!participar 12'
+    )
+    async def participar(self, ctx, evento_id: int):
+        evento = await self.bot.db_manager.execute_query(
+            "SELECT 1 FROM eventos WHERE id = $1 AND ativo = TRUE", evento_id, fetch="one"
+        )
+        if not evento:
+            return await ctx.send("Evento não encontrado ou inativo. Chegaste tarde à festa.")
+        
+        await self.bot.db_manager.execute_query(
+            "INSERT INTO participantes (evento_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            evento_id, ctx.author.id
+        )
+        await ctx.send(f"✅ Inscrição no evento ID {evento_id} confirmada! Agora dá o teu melhor.")
+
+    # Comandos de staff ficam escondidos da ajuda padrão
+    @commands.command(name='criarevento', hidden=True)
+    @check_permission_level(2)
     async def criar_evento(self, ctx, recompensa: int, meta: int, *, nome: str):
         if recompensa <= 0 or meta <= 0:
             return await ctx.send("A recompensa e a meta devem ser valores positivos.")
@@ -67,39 +112,7 @@ class Eventos(commands.Cog):
         
         await ctx.send(f"✅ Evento **'{nome}'** (ID: {evento_id}) criado com sucesso!")
 
-    @commands.command(name='listareventos')
-    async def listar_eventos(self, ctx):
-        eventos = await self.bot.db_manager.execute_query(
-            "SELECT id, nome, recompensa, meta_participacao FROM eventos WHERE ativo = TRUE", fetch="all"
-        )
-
-        if not eventos:
-            return await ctx.send("Não há eventos ativos no momento.")
-
-        embed = discord.Embed(title="🏆 Eventos Ativos", color=0xe91e63)
-        for evento in eventos:
-            embed.add_field(
-                name=f"ID: {evento['id']} - {evento['nome']}",
-                value=f"Recompensa: `{evento['recompensa']} GC` | Meta: `{evento['meta_participacao']} participações`",
-                inline=False
-            )
-        await ctx.send(embed=embed)
-
-    @commands.command(name='participar')
-    async def participar(self, ctx, evento_id: int):
-        evento = await self.bot.db_manager.execute_query(
-            "SELECT 1 FROM eventos WHERE id = $1 AND ativo = TRUE", evento_id, fetch="one"
-        )
-        if not evento:
-            return await ctx.send("Evento não encontrado ou inativo.")
-        
-        await self.bot.db_manager.execute_query(
-            "INSERT INTO participantes (evento_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            evento_id, ctx.author.id
-        )
-        await ctx.send(f"✅ Você inscreveu-se no evento ID {evento_id}!")
-
-    @commands.command(name='confirmar')
+    @commands.command(name='confirmar', hidden=True)
     @check_permission_level(1)
     async def confirmar(self, ctx, evento_id: int, membros: commands.Greedy[discord.Member]):
         if not membros:
@@ -118,10 +131,9 @@ class Eventos(commands.Cog):
         )
         await ctx.send(f"✅ Progresso adicionado para {len(membros)} membros no evento ID {evento_id}.")
 
-    @commands.command(name='confirmartodos')
+    @commands.command(name='confirmartodos', hidden=True)
     @check_permission_level(1)
     async def confirmar_todos(self, ctx, evento_id: int):
-        """Confirma a participação de todos os membros inscritos num evento."""
         evento = await self.bot.db_manager.execute_query(
             "SELECT 1 FROM eventos WHERE id = $1 AND ativo = TRUE", evento_id, fetch="one"
         )
@@ -143,7 +155,7 @@ class Eventos(commands.Cog):
         )
         await ctx.send(f"✅ Progresso adicionado para **todos os {len(membros_ids)}** membros inscritos no evento ID {evento_id}.")
 
-    @commands.command(name='confirmarexceto')
+    @commands.command(name='confirmarexceto', hidden=True)
     @check_permission_level(1)
     async def confirmar_exceto(self, ctx, evento_id: int, membros_excluidos: commands.Greedy[discord.Member]):
         """Confirma todos, exceto os membros mencionados."""
@@ -157,7 +169,7 @@ class Eventos(commands.Cog):
             return await ctx.send("Evento não encontrado ou inativo.")
 
         ids_excluidos = {m.id for m in membros_excluidos}
-
+        
         # Obter todos os participantes e filtrar os que não devem ser confirmados
         participantes = await self.bot.db_manager.execute_query(
             "SELECT user_id FROM participantes WHERE evento_id = $1", evento_id, fetch="all"
@@ -176,7 +188,7 @@ class Eventos(commands.Cog):
         )
         await ctx.send(f"✅ Progresso adicionado para **{len(membros_a_confirmar_ids)}** membros no evento ID {evento_id} (excluindo {len(membros_excluidos)} mencionados).")
 
-    @commands.command(name='finalizarevento')
+    @commands.command(name='finalizarevento', hidden=True)
     @check_permission_level(1)
     async def finalizar_evento(self, ctx, evento_id: int):
         evento_info = await self.bot.db_manager.execute_query(

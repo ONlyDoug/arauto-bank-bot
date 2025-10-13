@@ -13,7 +13,7 @@ class Orbes(commands.Cog):
             "dourada": {"nome": "Dourada", "cor": discord.Color.gold()}
         }
 
-    @commands.command(name="config-orbe")
+    @commands.command(name="config-orbe", hidden=True)
     @check_permission_level(4)
     async def config_orbe(self, ctx, cor: str, valor: int):
         cor_lower = cor.lower()
@@ -24,15 +24,19 @@ class Orbes(commands.Cog):
         await self.bot.db_manager.set_config_value(f"orbe_{cor_lower}", str(valor))
         await ctx.send(f"✅ Recompensa para a orbe **{self.cores_orbe[cor_lower]['nome']}** definida para **{valor}** moedas.")
 
-    @commands.command(name="orbe")
+    @commands.command(
+        name="orbe",
+        help='Submete uma captura de orbe para aprovação. Tem de anexar um print e mencionar todos os membros do grupo na mesma mensagem.',
+        usage='!orbe roxa @Membro1 @Membro2 @Membro3'
+    )
     async def orbe(self, ctx, cor: str, membros: commands.Greedy[discord.Member]):
         cor_lower = cor.lower()
         if cor_lower not in self.cores_orbe:
-            await ctx.send(f"❌ Cor de orbe inválida. Use uma das seguintes: {', '.join(self.cores_orbe.keys())}.")
+            await ctx.send(f"❌ Cor de orbe inválida. As cores são como os sentimentos, não se inventam. Use: `{', '.join(self.cores_orbe.keys())}`.")
             return
 
         if not ctx.message.attachments or not ctx.message.attachments[0].content_type.startswith('image/'):
-            await ctx.send("❌ Você precisa de anexar um print (imagem) da captura da orbe.")
+            await ctx.send("❌ E o print da orbe, foi passear? Anexe a imagem para provar a sua conquista.")
             return
 
         imagem = ctx.message.attachments[0]
@@ -45,7 +49,7 @@ class Orbes(commands.Cog):
         valor_total_str = await self.bot.db_manager.get_config_value(f'orbe_{cor_lower}', '0')
         valor_total = int(valor_total_str)
         if valor_total == 0:
-            await ctx.send(f"⚠️ A recompensa para a orbe {cor} ainda não foi configurada pela administração.")
+            await ctx.send(f"⚠️ A recompensa para a orbe {cor} ainda não foi configurada pela administração. Fez o trabalho todo para nada... por enquanto.")
             return
 
         recompensa_individual = valor_total // len(membros_unicos)
@@ -79,7 +83,7 @@ class Orbes(commands.Cog):
             )
 
             await ctx.message.add_reaction("✅")
-            await ctx.send("✅ Submissão enviada para análise!", delete_after=10)
+            await ctx.send("✅ Submissão enviada para análise! A staff já vai ver se essa orbe é real ou se é mais uma miragem sua.", delete_after=10)
 
         except Exception as e:
             await ctx.send("❌ Ocorreu um erro ao enviar a sua submissão. Tente novamente.")

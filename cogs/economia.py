@@ -33,7 +33,7 @@ class Economia(commands.Cog):
         saldo_atual = await self.get_saldo(user_id)
         if saldo_atual < valor:
             raise ValueError("Saldo insuficiente.")
-        
+
         await self.bot.db_manager.execute_query(
             "UPDATE banco SET saldo = saldo - $1 WHERE user_id = $2", valor, user_id
         )
@@ -47,38 +47,43 @@ class Economia(commands.Cog):
         try:
             # Garante que a conta do destinatário existe
             await self.get_saldo(destinatario_id)
-            
             await self.levantar(self.ID_TESOURO_GUILDA, valor, f"Pagamento para {destinatario_id}: {descricao}")
             await self.depositar(destinatario_id, valor, descricao)
         except ValueError:
-            # Lança um erro específico se o tesouro não tiver fundos
             raise ValueError("O Tesouro da Guilda não tem saldo suficiente para pagar esta recompensa.")
         except Exception as e:
             print(f"Erro inesperado em transferir_do_tesouro: {e}")
             raise e
 
-    @commands.command(name='saldo')
+    @commands.command(
+        name='saldo',
+        help='Mostra o seu saldo de moedas ou o de outro membro.',
+        usage='!saldo @MembroDaGuilda'
+    )
     async def saldo(self, ctx, target_user: discord.Member = None):
         target_user = target_user or ctx.author
         saldo_user = await self.get_saldo(target_user.id)
-        
+
         embed = discord.Embed(color=discord.Color.gold(), timestamp=datetime.utcnow())
         embed.set_author(name=f"Saldo de {target_user.display_name}", icon_url=target_user.display_avatar.url)
         embed.add_field(name="Moedas", value=f"**{saldo_user:,}** 🪙")
-        
+
         await ctx.send(embed=embed)
 
-    @commands.command(name='transferir')
+    @commands.command(
+        name='transferir',
+        help='Envia uma quantidade de moedas da sua conta para a de outro membro. Uma pequena taxa invisível é cobrada pela conveniência (brincadeira... ou não).',
+        usage='!transferir @MembroDaGuilda 100'
+    )
     async def transferir(self, ctx, destinatario: discord.Member, valor: int):
         if valor <= 0:
             return await ctx.send("❌ O valor da transferência deve ser positivo.")
         if destinatario == ctx.author or destinatario.bot:
-            return await ctx.send("❌ Você não pode transferir moedas para si mesmo ou para um bot.")
+            return await ctx.send("❌ Tentar transferir para si mesmo ou para um bot? Espertinho. Mas não funciona.")
 
         try:
             # Garante que a conta do destinatário existe
             await self.get_saldo(destinatario.id)
-            
             await self.levantar(ctx.author.id, valor, f"Transferência para {destinatario.name}")
             await self.depositar(destinatario.id, valor, f"Transferência de {ctx.author.name}")
 
@@ -86,7 +91,7 @@ class Economia(commands.Cog):
             embed.add_field(name="Remetente", value=ctx.author.mention, inline=True)
             embed.add_field(name="Destinatário", value=destinatario.mention, inline=True)
             embed.add_field(name="Valor", value=f"**{valor:,}** 🪙", inline=False)
-            
+
             await ctx.send(embed=embed)
 
         except ValueError as e:
