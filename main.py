@@ -3,6 +3,7 @@ from discord.ext import commands
 import os
 from dotenv import load_dotenv
 import asyncio
+import difflib  # <-- Adicione esta linha
 
 # Carrega as variáveis de ambiente
 load_dotenv()
@@ -89,33 +90,57 @@ class ArautoBankBot(commands.Bot):
         print('------')
 
     async def on_command_error(self, ctx, error):
-        # Ignora erros que não queremos reportar (comando não encontrado, falha de permissão silenciosa)
-        if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
+        # Ignora falhas de permissão silenciosamente para não poluir o chat
+        if isinstance(error, commands.CheckFailure):
             return
 
-        # --- SISTEMA DE SUPORTE AUTOMÁTICO ---
-        # Erro para quando faltam argumentos
+        # --- NOVO SISTEMA DE AJUDA INTELIGENTE E CÓMICO ---
+
+        if isinstance(error, commands.CommandNotFound):
+            # O utilizador escreveu um comando que não existe (ex: !paguei, !saldoo)
+            comando_errado = ctx.invoked_with
+            
+            # Pega numa lista de todos os nomes de comandos que o bot conhece
+            comandos_validos = [cmd.name for cmd in self.commands if not cmd.hidden]
+            
+            # Usa a magia da programação para encontrar a correspondência mais próxima
+            sugestoes = difflib.get_close_matches(comando_errado, comandos_validos, n=1, cutoff=0.7)
+            
+            if sugestoes:
+                # Se encontrarmos uma sugestão, a resposta é mais direcionada e sarcástica
+                await ctx.send(
+                    f"Burp... A sério, {ctx.author.mention}? `!{comando_errado}` não faz sentido nem na minha dimensão. "
+                    f"O meu scanner de mentes de baixo QI sugere que talvez quisesses dizer **`!{sugestoes[0]}`**. Tenta lá isso, anda."
+                )
+            else:
+                # Se nem o algoritmo adivinha, a resposta é mais genérica
+                await ctx.send(
+                    f"Ora bolas, {ctx.author.mention}. `!{comando_errado}`? Isso não é um comando. "
+                    f"Parece que o teu teclado tropeçou. Pede o manual de instruções com `!ajuda` antes que eu perca a paciência."
+                )
+            return
+
         if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.message.delete()
+            # O utilizador esqueceu-se de adicionar argumentos (ex: !transferir sem nada à frente)
+            parametro_em_falta = error.param.name
             await ctx.send(
-                f"🙄 {ctx.author.mention}, a sério? Faltou-me dizer que o comando `!{ctx.command.name}` precisa de mais alguma coisa. "
-                f"Adivinho eu o que é? Ajuda-me a ajudar-te e completa o comando. Se tiveres dúvidas, usa `!ajuda {ctx.command.name}`.",
-                delete_after=15
+                f"Oh, geez, {ctx.author.mention}... `!{ctx.command.name}`. E depois? "
+                f"Ficaste sem tinta a meio? Falta aí o **`{parametro_em_falta}`**. "
+                f"Não me faças adivinhar, o meu cérebro já está ocupado a calcular o sentido do universo. Completa o comando ou usa `!ajuda {ctx.command.name}`."
             )
             return
 
-        # Erro para quando o tipo de argumento está errado (ex: texto em vez de número)
         if isinstance(error, commands.BadArgument):
-            await ctx.message.delete()
+            # O utilizador usou o tipo de argumento errado (ex: !comprar batata)
             await ctx.send(
-                f"😒 {ctx.author.mention}, parece que te baralhaste nas palavras e nos números. "
-                f"O comando `!{ctx.command.name}` não estava à espera disso. Vê lá se não estás a tentar pagar a taxa com um poema. Usa `!ajuda {ctx.command.name}` para veres um exemplo.",
-                delete_after=15
+                f"Que diabo, {ctx.author.mention}! Estás a tentar enfiar um quadrado num buraco redondo. "
+                f"Os argumentos que deste para `!{ctx.command.name}` são do tipo errado. "
+                f"Lê as instruções em `!ajuda {ctx.command.name}` antes que eu transforme as tuas moedas em pó cósmico."
             )
             return
 
-        # Para todos os outros erros, regista no log para análise
-        print(f"Erro num comando: {ctx.command}: {error}")
+        # Para todos os outros erros, regista no log para a nossa análise
+        print(f"Erro inesperado no comando '{ctx.command}': {error}")
 
 # --- Iniciar o Bot ---
 if __name__ == "__main__":
