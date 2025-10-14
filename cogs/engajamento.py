@@ -48,8 +48,6 @@ class Engajamento(commands.Cog):
             for guild in self.bot.guilds:
                 for channel in guild.voice_channels:
                     for member in channel.members:
-                        # --- CORREÇÃO DE BUG ---
-                        # Adiciona uma verificação para garantir que member.voice existe
                         if member.bot or not member.voice or member.voice.self_deaf or member.voice.self_mute:
                             continue
                         
@@ -62,9 +60,7 @@ class Engajamento(commands.Cog):
                                 await self.registrar_renda_passiva(member.id, 'voz', recompensa_voz)
                         except Exception as e:
                             print(f"Erro ao processar membro de voz {member.id}: {e}")
-
                         await asyncio.sleep(0)
-
         except Exception as e:
             print(f"Erro fatal na tarefa de recompensar_voz: {e}")
 
@@ -76,27 +72,21 @@ class Engajamento(commands.Cog):
     async def on_message(self, message):
         if message.author.bot or message.guild is None or message.content.startswith('!'):
             return
-
         user_id = message.author.id
         agora = datetime.utcnow()
-        
         try:
             configs = await self.bot.db_manager.get_all_configs(['recompensa_chat', 'limite_chat', 'cooldown_chat'])
             recompensa_chat = int(configs.get('recompensa_chat', '0'))
             limite_chat = int(configs.get('limite_chat', '0'))
             cooldown_chat = int(configs.get('cooldown_chat', '60'))
-
             if recompensa_chat == 0 or limite_chat == 0:
                 return
-
             total_ganho_hoje = await self.get_total_renda_passiva_diaria(user_id, 'chat')
             if total_ganho_hoje >= limite_chat:
                 return
-
             last_message_time = self.chat_cooldowns.get(user_id)
             if last_message_time and (agora - last_message_time).total_seconds() < cooldown_chat:
                 return
-
             self.chat_cooldowns[user_id] = agora
             economia_cog = self.bot.get_cog('Economia')
             await economia_cog.transferir_do_tesouro(user_id, recompensa_chat, "Renda passiva por atividade no chat")
@@ -117,17 +107,23 @@ class Engajamento(commands.Cog):
             if recompensa_reacao == 0 or str(payload.channel_id) != canal_anuncios_id:
                 return
             
-            # --- LÓGICA DE CORREÇÃO DA EXPLOIT ---
-            # Tenta inserir na nova tabela. Se a reação já existir, a query falhará silenciosamente.
-            try:
-                await self.bot.db_manager.execute_query(
-                    "INSERT INTO reacoes_anuncios (user_id, message_id) VALUES ($1, $2)",
-                    payload.user_id, payload.message_id
-                )
-            except Exception:
-                # Ocorreu um erro de violação de chave primária, o que significa que o user já reagiu.
-                # Podemos simplesmente ignorar e não dar a recompensa.
+            # --- LÓGICA DE CORREÇÃO DEFINITIVA ---
+            # 1. VERIFICAR primeiro se a recompensa já foi atribuída.
+            ja_reagiu = await self.bot.db_manager.execute_query(
+                "SELECT 1 FROM reacoes_anuncios WHERE user_id = $1 AND message_id = $2",
+                payload.user_id, payload.message_id,
+                fetch="one"
+            )
+            
+            if ja_reagiu:
+                # Se a consulta retornar algo, o jogador já foi recompensado por esta reação.
                 return
+
+            # 2. Se não foi atribuída, INSERIR o registo e DEPOIS pagar.
+            await self.bot.db_manager.execute_query(
+                "INSERT INTO reacoes_anuncios (user_id, message_id) VALUES ($1, $2)",
+                payload.user_id, payload.message_id
+            )
 
             economia_cog = self.bot.get_cog('Economia')
             await economia_cog.transferir_do_tesouro(payload.user_id, recompensa_reacao, f"Recompensa por reagir ao anúncio {payload.message_id}")
@@ -136,7 +132,9 @@ class Engajamento(commands.Cog):
         except Exception as e:
             print(f"Erro em on_raw_reaction_add para {payload.user_id}: {e}")
 
-    @tasks.loop(hours=4)
+    # --- MELHORIA DE ENGAJAMENTO ---
+    # A frequência foi aumentada para 2 horas para maior visibilidade.
+    @tasks.loop(hours=2)
     async def enviar_mensagem_engajamento(self):
         try:
             canal_id_str = await self.bot.db_manager.get_config_value("canal_batepapo", '0')
@@ -145,20 +143,24 @@ class Engajamento(commands.Cog):
 
             canal = self.bot.get_channel(int(canal_id_str))
             if not canal:
+                print("AVISO: Canal de bate-papo para engajamento não encontrado.")
                 return
             
-            membros_online = [m for m in canal.guild.members if not m.bot and m.status != discord.Status.offline]
+            membros_online = [m for m in canal.guild.members if not m.bot and m.status != discord.Status.offline and m.status != discord.Status.dnd]
             if not membros_online:
                 return
 
             membro_sorteado = random.choice(membros_online)
             
+            # Mensagens foram diversificadas para aumentar o engajamento.
             mensagens = [
                 f"Ei {membro_sorteado.mention}, sabia que pode usar as moedas que ganha para comprar itens na `!loja`?",
-                f"A participação em eventos é a melhor forma de juntar moedas! Fique de olho no canal de eventos, {membro_sorteado.mention}!",
+                f"A participação em eventos é a melhor forma de juntar moedas! Fique de olho com `!listareventos`, {membro_sorteado.mention}!",
                 "Lembrem-se: cada moeda que vocês ganham é lastreada em prata de verdade! Use `!info-moeda` para ver a saúde da nossa economia.",
-                f"{membro_sorteado.mention}, já viu o seu `!extrato` hoje? Acompanhe os seus ganhos!",
-                "Quanto mais participamos, mais forte a guilda fica e mais recompensas todos ganham. Continuem com o bom trabalho!"
+                f"{membro_sorteado.mention}, já viu o seu `!extrato` hoje? Acompanhe os seus ganhos e gastos!",
+                "Quanto mais participamos, mais forte a guilda fica e mais recompensas todos ganham. Continuem com o bom trabalho!",
+                f"Uma dica para {membro_sorteado.mention}: tempo em canais de voz gera renda passiva! Junte-se a um canal e veja a magia acontecer.",
+                "Não sabe como um comando funciona? Use `!ajuda <nome_do_comando>` e eu explico tudo nos mínimos detalhes."
             ]
             
             embed = discord.Embed(description=random.choice(mensagens), color=discord.Color.random())
@@ -171,7 +173,9 @@ class Engajamento(commands.Cog):
     async def before_enviar_mensagem_engajamento(self):
         await self.bot.wait_until_ready()
         print("Tarefa de mensagens de engajamento iniciada.")
-        await asyncio.sleep(random.randint(60, 300))
+        # O tempo de espera inicial foi reduzido.
+        await asyncio.sleep(random.randint(30, 120))
+
 
 async def setup(bot):
     await bot.add_cog(Engajamento(bot))

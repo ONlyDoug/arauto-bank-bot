@@ -89,8 +89,12 @@ class ArautoBankBot(commands.Bot):
         print('------')
 
     async def on_command_error(self, ctx, error):
+        # Ignora erros que não queremos reportar (comando não encontrado, falha de permissão silenciosa)
         if isinstance(error, (commands.CommandNotFound, commands.CheckFailure)):
             return
+
+        # --- SISTEMA DE SUPORTE AUTOMÁTICO ---
+        # Erro para quando faltam argumentos
         if isinstance(error, commands.MissingRequiredArgument):
             await ctx.message.delete()
             await ctx.send(
@@ -99,6 +103,8 @@ class ArautoBankBot(commands.Bot):
                 delete_after=15
             )
             return
+
+        # Erro para quando o tipo de argumento está errado (ex: texto em vez de número)
         if isinstance(error, commands.BadArgument):
             await ctx.message.delete()
             await ctx.send(
@@ -107,6 +113,8 @@ class ArautoBankBot(commands.Bot):
                 delete_after=15
             )
             return
+
+        # Para todos os outros erros, regista no log para análise
         print(f"Erro num comando: {ctx.command}: {error}")
 
 # --- Iniciar o Bot ---
