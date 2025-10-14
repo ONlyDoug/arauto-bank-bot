@@ -107,8 +107,6 @@ class Engajamento(commands.Cog):
             if recompensa_reacao == 0 or str(payload.channel_id) != canal_anuncios_id:
                 return
             
-            # --- LÓGICA DE CORREÇÃO DEFINITIVA ---
-            # 1. VERIFICAR primeiro se a recompensa já foi atribuída.
             ja_reagiu = await self.bot.db_manager.execute_query(
                 "SELECT 1 FROM reacoes_anuncios WHERE user_id = $1 AND message_id = $2",
                 payload.user_id, payload.message_id,
@@ -116,10 +114,8 @@ class Engajamento(commands.Cog):
             )
             
             if ja_reagiu:
-                # Se a consulta retornar algo, o jogador já foi recompensado por esta reação.
                 return
 
-            # 2. Se não foi atribuída, INSERIR o registo e DEPOIS pagar.
             await self.bot.db_manager.execute_query(
                 "INSERT INTO reacoes_anuncios (user_id, message_id) VALUES ($1, $2)",
                 payload.user_id, payload.message_id
@@ -132,38 +128,44 @@ class Engajamento(commands.Cog):
         except Exception as e:
             print(f"Erro em on_raw_reaction_add para {payload.user_id}: {e}")
 
-    # --- MELHORIA DE ENGAJAMENTO ---
-    # A frequência foi aumentada para 2 horas para maior visibilidade.
     @tasks.loop(hours=2)
     async def enviar_mensagem_engajamento(self):
         try:
-            canal_id_str = await self.bot.db_manager.get_config_value("canal_batepapo", '0')
+            # --- LÓGICA ATUALIZADA ---
+            # Busca tanto o canal de bate-papo quanto o cargo de membro
+            configs = await self.bot.db_manager.get_all_configs(["canal_batepapo", "cargo_membro"])
+            canal_id_str = configs.get("canal_batepapo", '0')
+            cargo_id_str = configs.get("cargo_membro", '0')
+
             if not canal_id_str or canal_id_str == '0':
                 return
-
+            
             canal = self.bot.get_channel(int(canal_id_str))
             if not canal:
                 print("AVISO: Canal de bate-papo para engajamento não encontrado.")
                 return
-            
-            membros_online = [m for m in canal.guild.members if not m.bot and m.status != discord.Status.offline and m.status != discord.Status.dnd]
-            if not membros_online:
-                return
 
-            membro_sorteado = random.choice(membros_online)
-            
-            # Mensagens foram diversificadas para aumentar o engajamento.
+            # Tenta encontrar o cargo de membro para mencionar
+            mencao_alvo = "@everyone" # Fallback para @everyone se o cargo não for encontrado
+            if cargo_id_str and cargo_id_str != '0':
+                cargo = canal.guild.get_role(int(cargo_id_str))
+                if cargo:
+                    mencao_alvo = cargo.mention
+                else:
+                    print(f"AVISO: Cargo de membro com ID {cargo_id_str} não encontrado para a mensagem de engajamento.")
+
+            # Mensagens foram reescritas para serem mais gerais e usarem a menção do cargo
             mensagens = [
-                f"Ei {membro_sorteado.mention}, sabia que pode usar as moedas que ganha para comprar itens na `!loja`?",
-                f"A participação em eventos é a melhor forma de juntar moedas! Fique de olho com `!listareventos`, {membro_sorteado.mention}!",
-                "Lembrem-se: cada moeda que vocês ganham é lastreada em prata de verdade! Use `!info-moeda` para ver a saúde da nossa economia.",
-                f"{membro_sorteado.mention}, já viu o seu `!extrato` hoje? Acompanhe os seus ganhos e gastos!",
-                "Quanto mais participamos, mais forte a guilda fica e mais recompensas todos ganham. Continuem com o bom trabalho!",
-                f"Uma dica para {membro_sorteado.mention}: tempo em canais de voz gera renda passiva! Junte-se a um canal e veja a magia acontecer.",
-                "Não sabe como um comando funciona? Use `!ajuda <nome_do_comando>` e eu explico tudo nos mínimos detalhes."
+                f"Ei, {mencao_alvo}! Sabiam que podem usar as moedas que ganham para comprar itens na `!loja`?",
+                f"Atenção, {mencao_alvo}! A participação em eventos é a melhor forma de juntar moedas! Fiquem de olho com `!listareventos`!",
+                f"{mencao_alvo}, lembrem-se: cada moeda que vocês ganham é lastreada em prata de verdade! Usem `!info-moeda` para ver a saúde da nossa economia.",
+                f"Uma dica para {mencao_alvo}: tempo em canais de voz gera renda passiva! Juntem-se a um canal e vejam a magia acontecer.",
+                f"Não sabem como um comando funciona? Usem `!ajuda <nome_do_comando>` e eu explico tudo, {mencao_alvo}!"
             ]
             
             embed = discord.Embed(description=random.choice(mensagens), color=discord.Color.random())
+            
+            # O bot agora envia a mensagem com o embed
             await canal.send(embed=embed)
 
         except Exception as e:
@@ -173,7 +175,6 @@ class Engajamento(commands.Cog):
     async def before_enviar_mensagem_engajamento(self):
         await self.bot.wait_until_ready()
         print("Tarefa de mensagens de engajamento iniciada.")
-        # O tempo de espera inicial foi reduzido.
         await asyncio.sleep(random.randint(30, 120))
 
 
