@@ -3,10 +3,12 @@ from discord.ext import commands
 import asyncio
 from datetime import datetime
 from utils.permissions import check_permission_level
+from collections import defaultdict
 
 class Admin(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.ID_TESOURO_GUILDA = 1
 
     async def initialize_database_schema(self):
         try:
@@ -26,9 +28,6 @@ class Admin(commands.Cog):
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS renda_passiva_log (user_id BIGINT, tipo TEXT, data DATE, valor INTEGER, PRIMARY KEY (user_id, tipo, data))")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS submissoes_taxa (message_id BIGINT PRIMARY KEY, user_id BIGINT, status TEXT)")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS puxadas_log (puxador_id BIGINT, data DATE, quantidade INTEGER, PRIMARY KEY (puxador_id, data))")
-            
-            # --- SOLUÇÃO ANTI-EXPLOIT ---
-            # Adiciona a tabela para registo único de reações por utilizador e por mensagem.
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS reacoes_anuncios (user_id BIGINT, message_id BIGINT, PRIMARY KEY (user_id, message_id))")
             
             default_configs = {
@@ -54,7 +53,7 @@ class Admin(commands.Cog):
             print(f"❌ Ocorreu um erro ao inicializar a base de dados: {e}")
             raise e
 
-    @commands.command(name='initdb')
+    @commands.command(name='initdb', hidden=True)
     @commands.has_permissions(administrator=True)
     async def initdb(self, ctx):
         await ctx.send("A forçar a verificação da base de dados...")
@@ -63,7 +62,7 @@ class Admin(commands.Cog):
             await ctx.send("✅ Verificação da base de dados concluída.")
         except Exception as e:
             await ctx.send(f"❌ Falha ao inicializar a base de dados: {e}")
-        
+
     async def create_and_pin(self, ctx, *, category, name, embed, overwrites=None, set_config_key=None):
         try:
             channel_overwrites = overwrites if overwrites is not None else {}
@@ -363,7 +362,121 @@ class Admin(commands.Cog):
 
         await ctx.send(embed=embed)
 
+    @commands.command(
+        name='auditar',
+        help='Realiza uma auditoria completa, categorizando todas as fontes de ganho de um membro.',
+        usage='!auditar @MembroSuspeito',
+        hidden=True
+    )
+    @check_permission_level(4)
+    async def auditar(self, ctx, membro: discord.Member):
+        user_id = membro.id
+        await ctx.send(f"🔍 A iniciar auditoria económica completa para **{membro.display_name}**. A analisar os livros...")
+
+        transacoes = await self.bot.db_manager.execute_query(
+            "SELECT valor, descricao FROM transacoes WHERE user_id = $1 AND tipo = 'deposito' ORDER BY data DESC",
+            user_id, fetch="all"
+        )
+
+        if not transacoes:
+            return await ctx.send(f"Nenhuma transação de ganho encontrada para {membro.display_name}.")
+
+        # defaultdict simplifica a contagem
+        categorias = defaultdict(lambda: {'total': 0, 'count': 0})
+
+        # Categorização inteligente das transações
+        for t in transacoes:
+            desc = t['descricao'].lower() if t['descricao'] else ''
+            valor = t['valor']
+            
+            if desc.startswith("recompensa do evento"):
+                categorias['Eventos']['total'] += valor
+                categorias['Eventos']['count'] += 1
+            elif desc.startswith("recompensa de orbe"):
+                categorias['Orbes']['total'] += valor
+                categorias['Orbes']['count'] += 1
+            elif desc.startswith("renda passiva por atividade em voz"):
+                categorias['Renda Passiva (Voz)']['total'] += valor
+                categorias['Renda Passiva (Voz)']['count'] += 1
+            elif desc.startswith("renda passiva por atividade no chat"):
+                categorias['Renda Passiva (Chat)']['total'] += valor
+                categorias['Renda Passiva (Chat)']['count'] += 1
+            elif desc.startswith("recompensa por reagir"):
+                categorias['Reações a Anúncios']['total'] += valor
+                categorias['Reações a Anúncios']['count'] += 1
+            elif desc.startswith("transferência de"):
+                categorias['Transferências Recebidas']['total'] += valor
+                categorias['Transferências Recebidas']['count'] += 1
+            elif desc.startswith("emissão de moedas") or desc.startswith("airdrop"):
+                categorias['Administrativo (Emissão/Airdrop)']['total'] += valor
+                categorias['Administrativo (Emissão/Airdrop)']['count'] += 1
+            else:
+                categorias['Outros Ganhos']['total'] += valor
+                categorias['Outros Ganhos']['count'] += 1
+
+        economia_cog = self.bot.get_cog('Economia')
+        saldo_atual = await economia_cog.get_saldo(user_id)
+
+        # Monta o relatório completo
+        embed = discord.Embed(
+            title=f"🕵️‍♂️ Relatório de Auditoria Completo: {membro.display_name}",
+            description=f"Análise detalhada de todas as fontes de rendimento registadas.",
+            color=discord.Color.dark_blue()
+        )
+        embed.set_thumbnail(url=membro.display_avatar.url)
+        embed.add_field(name="Saldo Atual Total", value=f"**{saldo_atual:,}** 🪙", inline=False)
+        
+        relatorio_texto = ""
+        # Ordena as categorias por valor total para destacar as maiores fontes de renda
+        for nome_cat, dados in sorted(categorias.items(), key=lambda item: item[1]['total'], reverse=True):
+            relatorio_texto += f"**{nome_cat}:**\n"
+            relatorio_texto += f" • Total Ganho: `{dados['total']:,}` 🪙\n"
+            relatorio_texto += f" • N.º de Transações: `{dados['count']}`\n"
+        
+        embed.add_field(name="Discriminação de Ganhos por Categoria", value=relatorio_texto, inline=False)
+        embed.set_footer(text="Use estes dados para identificar anomalias e depois corrija com !confiscar")
+        await ctx.send(embed=embed)
+
+
+    @commands.command(
+        name='confiscar',
+        help='Remove uma quantidade de moedas de um membro e devolve ao tesouro da guilda.',
+        usage='!confiscar @MembroSuspeito 50000',
+        hidden=True
+    )
+    @check_permission_level(4)
+    async def confiscar(self, ctx, membro: discord.Member, valor: int):
+        if valor <= 0:
+            return await ctx.send("❌ O valor a confiscar deve ser positivo.")
+
+        user_id = membro.id
+        economia_cog = self.bot.get_cog('Economia')
+        
+        try:
+            # Garante que as funções de levantar/depositar são usadas para manter os logs de transações
+            await economia_cog.levantar(user_id, valor, f"Confisco administrativo por {ctx.author.name}")
+            await economia_cog.depositar(self.ID_TESOURO_GUILDA, valor, f"Devolução de confisco de {membro.name}")
+
+            saldo_final = await economia_cog.get_saldo(user_id)
+            
+            embed = discord.Embed(
+                title="⚖️ Correção de Saldo Realizada",
+                description=f"O saldo de **{membro.display_name}** foi corrigido com sucesso.",
+                color=discord.Color.dark_red()
+            )
+            embed.add_field(name="Valor Confiscado", value=f"**{valor:,}** 🪙", inline=True)
+            embed.add_field(name="Devolvido ao Tesouro", value="Sim", inline=True)
+            embed.add_field(name="Saldo Final do Membro", value=f"**{saldo_final:,}** 🪙", inline=False)
+            embed.set_footer(text=f"Ação realizada por: {ctx.author.display_name}")
+            
+            await ctx.send(embed=embed)
+
+        except ValueError as e:
+            await ctx.send(f"❌ **Falha na operação:** {e} (Provavelmente o membro não tem o saldo que está a tentar remover).")
+        except Exception as e:
+            await ctx.send(f"❌ Ocorreu um erro inesperado durante o confisco: {e}")
 
 async def setup(bot):
+    # Garante que o Admin cog é adicionado ao bot
     await bot.add_cog(Admin(bot))
 
