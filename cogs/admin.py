@@ -476,6 +476,25 @@ class Admin(commands.Cog):
         except Exception as e:
             await ctx.send(f"❌ Ocorreu um erro inesperado durante o confisco: {e}")
 
+    @commands.command(
+        name='testar-engajamento',
+        help='Força o envio de uma mensagem de engajamento para o canal de bate-papo configurado.',
+        hidden=True
+    )
+    @check_permission_level(4)
+    async def testar_engajamento(self, ctx):
+        engajamento_cog = self.bot.get_cog('Engajamento')
+        if not engajamento_cog:
+            return await ctx.send("❌ O módulo de Engajamento não está carregado.")
+
+        try:
+            await ctx.send("🚀 A tentar enviar uma mensagem de engajamento de teste...")
+            # Chamamos a lógica diretamente
+            await engajamento_cog.enviar_mensagem_engajamento()
+            await ctx.send("✅ Teste concluído. Verifique o canal de bate-papo.")
+        except Exception as e:
+            await ctx.send(f"❌ Falha no teste. Erro: {e}")
+
 async def setup(bot):
     # Garante que o Admin cog é adicionado ao bot
     await bot.add_cog(Admin(bot))
