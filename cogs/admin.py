@@ -359,7 +359,6 @@ class Admin(commands.Cog):
     async def verificar_config(self, ctx):
         await ctx.send("🔍 A gerar o relatório completo de configurações do Arauto Bank...")
 
-        # Busca todas as configurações de uma só vez
         todas_as_configs = await self.bot.db_manager.execute_query(
             "SELECT chave, valor FROM configuracoes ORDER BY chave ASC", fetch="all"
         )
@@ -372,9 +371,13 @@ class Admin(commands.Cog):
             color=discord.Color.orange()
         )
 
-        # Mapeamento de categorias para chaves
+        # --- CORREÇÃO APLICADA AQUI ---
+        # A chave 'canal_eventos' foi adicionada à lista de canais do sistema.
         categorias = {
-            "Canais do Sistema": ['canal_anuncios', 'canal_aprovacao', 'canal_batepapo', 'canal_log_taxas', 'canal_mercado', 'canal_orbes', 'canal_resgates'],
+            "Canais do Sistema": [
+                'canal_anuncios', 'canal_aprovacao', 'canal_batepapo', 'canal_eventos',
+                'canal_log_taxas', 'canal_mercado', 'canal_orbes', 'canal_resgates'
+            ],
             "Cargos Funcionais": ['cargo_membro', 'cargo_inadimplente', 'cargo_isento'],
             "Hierarquia de Permissões": ['perm_nivel_1', 'perm_nivel_2', 'perm_nivel_3', 'perm_nivel_4'],
             "Economia Principal": ['lastro_total_prata', 'taxa_conversao_prata'],
@@ -385,11 +388,10 @@ class Admin(commands.Cog):
 
         for nome_categoria, chaves in categorias.items():
             texto_categoria = ""
-            for chave in chaves:
+            for chave in sorted(chaves):  # Ordena as chaves para uma visualização consistente
                 valor = configs.get(chave, "Não definido")
                 display_valor = valor
 
-                # Tenta "traduzir" IDs para menções legíveis
                 if 'canal' in chave and valor.isdigit() and valor != '0':
                     obj = self.bot.get_channel(int(valor))
                     display_valor = obj.mention if obj else f"⚠️ ID Inválido: `{valor}`"
