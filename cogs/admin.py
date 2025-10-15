@@ -61,7 +61,7 @@ class Admin(commands.Cog):
                 'perm_nivel_1': '0', 'perm_nivel_2': '0', 'perm_nivel_3': '0', 'perm_nivel_4': '0',
                 'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
                 'canal_resgates': '0', 'canal_batepapo': '0', 'canal_log_taxas': '0',
-                'canal_eventos': '0', # <-- NOVA CONFIGURAÇÃO
+                'canal_eventos': '0', # <--- ADICIONE ESTA LINHA
                 'recompensa_voz': '1', 'limite_voz': '120',
                 'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60',
                 'recompensa_reacao': '50',
@@ -237,7 +237,8 @@ class Admin(commands.Cog):
     @commands.group(name="definircanal", invoke_without_command=True)
     @check_permission_level(4)
     async def definir_canal(self, ctx):
-        await ctx.send("Use `!definircanal <tipo> #canal`. Tipos: `anuncios`, `batepapo`, `logtaxas`.")
+        # Texto de ajuda atualizado para incluir a nova opção
+        await ctx.send("Use `!definircanal <tipo> #canal`. Tipos: `anuncios`, `batepapo`, `logtaxas`, `eventos`.")
     
     @definir_canal.command(name="anuncios")
     async def definir_canal_anuncios(self, ctx, canal: discord.TextChannel):
@@ -253,6 +254,12 @@ class Admin(commands.Cog):
     async def definir_canal_logtaxas(self, ctx, canal: discord.TextChannel):
         await self.bot.db_manager.set_config_value("canal_log_taxas", str(canal.id))
         await ctx.send(f"✅ O canal de logs das taxas foi definido como {canal.mention}.")
+    
+    # --- COMANDO CORRIGIDO E ADICIONADO ---
+    @definir_canal.command(name="eventos")
+    async def definir_canal_eventos(self, ctx, canal: discord.TextChannel):
+        await self.bot.db_manager.set_config_value("canal_eventos", str(canal.id))
+        await ctx.send(f"✅ O canal para anúncios de eventos foi definido como {canal.mention}.")
 
     @commands.command(name="anunciar")
     @check_permission_level(3)
