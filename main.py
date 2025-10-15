@@ -90,14 +90,14 @@ class ArautoBankBot(commands.Bot):
         print('------')
 
     async def on_command_error(self, ctx, error):
-        # Ignora falhas de permissão silenciosamente para não poluir o chat
         if isinstance(error, commands.CheckFailure):
             return
 
         # --- SISTEMA DE SUPORTE AUTOMÁTICO (COMPORTAMENTO FINAL) ---
 
         if isinstance(error, commands.CommandNotFound):
-            await ctx.message.delete()
+            await ctx.message.delete()  # Apaga a mensagem do jogador
+            
             comando_errado = ctx.invoked_with
             comandos_validos = [cmd.name for cmd in self.commands if not cmd.hidden]
             sugestoes = difflib.get_close_matches(comando_errado, comandos_validos, n=1, cutoff=0.7)
@@ -106,37 +106,36 @@ class ArautoBankBot(commands.Bot):
                 await ctx.send(
                     f"Burp... A sério, {ctx.author.mention}? `!{comando_errado}` não faz sentido... "
                     f"O meu scanner sugere que talvez quisesses dizer **`!{sugestoes[0]}`**. Tenta lá isso.",
-                    delete_after=60 # A mensagem do bot também desaparecerá
+                    delete_after=60 # A mensagem do bot desaparece após 1 minuto
                 )
             else:
                 await ctx.send(
                     f"Ora bolas, {ctx.author.mention}. `!{comando_errado}`? Isso não é um comando. "
                     f"Pede o manual de instruções com `!ajuda` antes que eu perca a paciência.",
-                    delete_after=60 # A mensagem do bot também desaparecerá
+                    delete_after=60 # A mensagem do bot desaparece após 1 minuto
                 )
             return
 
         if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.message.delete()
+            await ctx.message.delete()  # Apaga a mensagem do jogador
             parametro_em_falta = error.param.name
             await ctx.send(
                 f"Oh, geez, {ctx.author.mention}... `!{ctx.command.name}`. E depois? "
                 f"Falta aí o **`{parametro_em_falta}`**. "
                 f"Completa o comando ou usa `!ajuda {ctx.command.name}`.",
-                delete_after=60 # A mensagem do bot também desaparecerá
+                delete_after=60 # A mensagem do bot desaparece após 1 minuto
             )
             return
 
         if isinstance(error, commands.BadArgument):
-            await ctx.message.delete()
+            await ctx.message.delete()  # Apaga a mensagem do jogador
             await ctx.send(
                 f"Que diabo, {ctx.author.mention}! Os argumentos que deste para `!{ctx.command.name}` são do tipo errado. "
                 f"Lê as instruções em `!ajuda {ctx.command.name}` antes que eu transforme as tuas moedas em pó cósmico.",
-                delete_after=60 # A mensagem do bot também desaparecerá
+                delete_after=60 # A mensagem do bot desaparece após 1 minuto
             )
             return
 
-        # Para todos os outros erros, regista no log para a nossa análise
         print(f"Erro inesperado no comando '{ctx.command}': {error}")
 
 # --- Iniciar o Bot ---
@@ -144,6 +143,6 @@ if __name__ == "__main__":
     if not TOKEN or not DATABASE_URL:
         print("ERRO CRÍTICO: DISCORD_TOKEN ou DATABASE_URL não definidos no .env")
     else:
+    else:ot = ArautoBankBot()
         bot = ArautoBankBot()
         bot.run(TOKEN)
-
