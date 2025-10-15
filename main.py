@@ -94,48 +94,45 @@ class ArautoBankBot(commands.Bot):
         if isinstance(error, commands.CheckFailure):
             return
 
-        # --- NOVO SISTEMA DE AJUDA INTELIGENTE E CÓMICO ---
+        # --- SISTEMA DE SUPORTE AUTOMÁTICO (COMPORTAMENTO FINAL) ---
 
         if isinstance(error, commands.CommandNotFound):
-            # O utilizador escreveu um comando que não existe (ex: !paguei, !saldoo)
+            await ctx.message.delete()
             comando_errado = ctx.invoked_with
-            
-            # Pega numa lista de todos os nomes de comandos que o bot conhece
             comandos_validos = [cmd.name for cmd in self.commands if not cmd.hidden]
-            
-            # Usa a magia da programação para encontrar a correspondência mais próxima
             sugestoes = difflib.get_close_matches(comando_errado, comandos_validos, n=1, cutoff=0.7)
             
             if sugestoes:
-                # Se encontrarmos uma sugestão, a resposta é mais direcionada e sarcástica
                 await ctx.send(
-                    f"Burp... A sério, {ctx.author.mention}? `!{comando_errado}` não faz sentido nem na minha dimensão. "
-                    f"O meu scanner de mentes de baixo QI sugere que talvez quisesses dizer **`!{sugestoes[0]}`**. Tenta lá isso, anda."
+                    f"Burp... A sério, {ctx.author.mention}? `!{comando_errado}` não faz sentido... "
+                    f"O meu scanner sugere que talvez quisesses dizer **`!{sugestoes[0]}`**. Tenta lá isso.",
+                    delete_after=60 # A mensagem do bot também desaparecerá
                 )
             else:
-                # Se nem o algoritmo adivinha, a resposta é mais genérica
                 await ctx.send(
                     f"Ora bolas, {ctx.author.mention}. `!{comando_errado}`? Isso não é um comando. "
-                    f"Parece que o teu teclado tropeçou. Pede o manual de instruções com `!ajuda` antes que eu perca a paciência."
+                    f"Pede o manual de instruções com `!ajuda` antes que eu perca a paciência.",
+                    delete_after=60 # A mensagem do bot também desaparecerá
                 )
             return
 
         if isinstance(error, commands.MissingRequiredArgument):
-            # O utilizador esqueceu-se de adicionar argumentos (ex: !transferir sem nada à frente)
+            await ctx.message.delete()
             parametro_em_falta = error.param.name
             await ctx.send(
                 f"Oh, geez, {ctx.author.mention}... `!{ctx.command.name}`. E depois? "
-                f"Ficaste sem tinta a meio? Falta aí o **`{parametro_em_falta}`**. "
-                f"Não me faças adivinhar, o meu cérebro já está ocupado a calcular o sentido do universo. Completa o comando ou usa `!ajuda {ctx.command.name}`."
+                f"Falta aí o **`{parametro_em_falta}`**. "
+                f"Completa o comando ou usa `!ajuda {ctx.command.name}`.",
+                delete_after=60 # A mensagem do bot também desaparecerá
             )
             return
 
         if isinstance(error, commands.BadArgument):
-            # O utilizador usou o tipo de argumento errado (ex: !comprar batata)
+            await ctx.message.delete()
             await ctx.send(
-                f"Que diabo, {ctx.author.mention}! Estás a tentar enfiar um quadrado num buraco redondo. "
-                f"Os argumentos que deste para `!{ctx.command.name}` são do tipo errado. "
-                f"Lê as instruções em `!ajuda {ctx.command.name}` antes que eu transforme as tuas moedas em pó cósmico."
+                f"Que diabo, {ctx.author.mention}! Os argumentos que deste para `!{ctx.command.name}` são do tipo errado. "
+                f"Lê as instruções em `!ajuda {ctx.command.name}` antes que eu transforme as tuas moedas em pó cósmico.",
+                delete_after=60 # A mensagem do bot também desaparecerá
             )
             return
 

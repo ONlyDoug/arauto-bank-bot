@@ -316,49 +316,65 @@ class Admin(commands.Cog):
         await self.bot.db_manager.set_config_value('limite_puxadas_diario', str(limite))
         await ctx.send(f"✅ Limite diário de puxadas por membro definido para **{limite}**.")
 
-    @commands.command(name="verificarconfig")
+    @commands.command(
+        name="verificarconfig",
+        aliases=["verconfig"],
+        help="Exibe um painel completo com todas as configurações atuais do bot.",
+        hidden=True
+    )
     @check_permission_level(4)
     async def verificar_config(self, ctx):
-        """Exibe uma lista detalhada dos cargos e permissões configurados."""
-        await ctx.send("🔍 A verificar as configurações de cargos e permissões...")
+        await ctx.send("🔍 A gerar o relatório completo de configurações do Arauto Bank...")
 
-        chaves_cargos = [
-            'cargo_membro', 'cargo_inadimplente', 'cargo_isento',
-            'perm_nivel_1', 'perm_nivel_2', 'perm_nivel_3', 'perm_nivel_4'
-        ]
-
-        configs = await self.bot.db_manager.get_all_configs(chaves_cargos)
+        # Busca todas as configurações de uma só vez
+        todas_as_configs = await self.bot.db_manager.execute_query(
+            "SELECT chave, valor FROM configuracoes ORDER BY chave ASC", fetch="all"
+        )
+        
+        configs = {item['chave']: item['valor'] for item in todas_as_configs}
 
         embed = discord.Embed(
-            title="⚙️ Verificação de Configuração do Arauto Bank",
-            description="Esta é a lista de todos os cargos funcionais e de permissão registados no bot.",
+            title="⚙️ Painel de Configuração do Arauto Bank",
+            description="Relatório completo de todas as variáveis de sistema.",
             color=discord.Color.orange()
         )
 
-        # Seção de Cargos Funcionais
-        funcional_desc = ""
-        for chave in ['cargo_membro', 'cargo_inadimplente', 'cargo_isento']:
-            role_id = int(configs.get(chave, '0'))
-            role = ctx.guild.get_role(role_id) if role_id != 0 else None
-            status = role.mention if role else "⚠️ **Não definido**"
-            funcional_desc += f"**{chave.replace('_', ' ').capitalize()}:** {status}\n"
-        embed.add_field(name="Cargos Funcionais", value=funcional_desc, inline=False)
+        # Mapeamento de categorias para chaves
+        categorias = {
+            "Canais do Sistema": ['canal_anuncios', 'canal_aprovacao', 'canal_batepapo', 'canal_log_taxas', 'canal_mercado', 'canal_orbes', 'canal_resgates'],
+            "Cargos Funcionais": ['cargo_membro', 'cargo_inadimplente', 'cargo_isento'],
+            "Hierarquia de Permissões": ['perm_nivel_1', 'perm_nivel_2', 'perm_nivel_3', 'perm_nivel_4'],
+            "Economia Principal": ['lastro_total_prata', 'taxa_conversao_prata'],
+            "Sistema de Taxas": ['taxa_semanal_valor', 'taxa_dia_semana'],
+            "Renda Passiva": ['recompensa_voz', 'limite_voz', 'recompensa_chat', 'limite_chat', 'cooldown_chat', 'recompensa_reacao'],
+            "Eventos (Puxadas)": ['recompensa_puxar_bronze', 'recompensa_puxar_ouro', 'limite_puxadas_diario']
+        }
 
-        # Seção de Cargos de Permissão
-        permissao_desc = ""
-        for i in range(1, 5):
-            chave = f'perm_nivel_{i}'
-            role_ids_str = configs.get(chave, '')
-            if role_ids_str:
-                role_ids = [int(id_str) for id_str in role_ids_str.split(',')]
-                roles = [ctx.guild.get_role(rid) for rid in role_ids if ctx.guild.get_role(rid)]
-                status = ", ".join(r.mention for r in roles) if roles else "⚠️ **Cargos não encontrados**"
-            else:
-                status = "⚠️ **Não definido**"
-            permissao_desc += f"**Permissão Nível {i}:** {status}\n"
-        embed.add_field(name="Hierarquia de Permissões", value=permissao_desc, inline=False)
+        for nome_categoria, chaves in categorias.items():
+            texto_categoria = ""
+            for chave in chaves:
+                valor = configs.get(chave, "Não definido")
+                display_valor = valor
 
-        embed.set_footer(text="Use !cargo definir e !cargo permissao para ajustar estas configurações.")
+                # Tenta "traduzir" IDs para menções legíveis
+                if 'canal' in chave and valor.isdigit() and valor != '0':
+                    obj = self.bot.get_channel(int(valor))
+                    display_valor = obj.mention if obj else f"⚠️ ID Inválido: `{valor}`"
+                elif 'cargo' in chave and valor.isdigit() and valor != '0':
+                    obj = ctx.guild.get_role(int(valor))
+                    display_valor = obj.mention if obj else f"⚠️ ID Inválido: `{valor}`"
+                elif 'perm_nivel' in chave and valor and valor != '0':
+                    ids = valor.split(',')
+                    mencoes = []
+                    for role_id in ids:
+                        obj = ctx.guild.get_role(int(role_id))
+                        mencoes.append(obj.mention if obj else f"⚠️ ID Inválido: `{role_id}`")
+                    display_valor = ", ".join(mencoes)
+
+                texto_categoria += f"**{chave}:** {display_valor}\n"
+            
+            if texto_categoria:
+                embed.add_field(name=f"--- {nome_categoria} ---", value=texto_categoria, inline=False)
 
         await ctx.send(embed=embed)
 
