@@ -546,6 +546,20 @@ class Admin(commands.Cog):
         except Exception as e:
             await ctx.send(f"❌ Falha no teste. Erro: {e}")
 
+    @commands.command(
+        name='sync',
+        help='Sincroniza os comandos de barra (/) com o Discord.',
+        hidden=True
+    )
+    @commands.is_owner()  # Apenas o dono do bot pode executar
+    async def sync(self, ctx):
+        await ctx.send("🔄 A sincronizar comandos de barra com o Discord...")
+        try:
+            synced = await self.bot.tree.sync()
+            await ctx.send(f"✅ Sincronização concluída. {len(synced)} comandos sincronizados.")
+        except Exception as e:
+            await ctx.send(f"❌ Falha na sincronização: {e}")
+
 async def setup(bot):
     # Garante que o Admin cog é adicionado ao bot
     await bot.add_cog(Admin(bot))
