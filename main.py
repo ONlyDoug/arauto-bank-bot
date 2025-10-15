@@ -143,6 +143,5 @@ if __name__ == "__main__":
     if not TOKEN or not DATABASE_URL:
         print("ERRO CRÍTICO: DISCORD_TOKEN ou DATABASE_URL não definidos no .env")
     else:
-    else:ot = ArautoBankBot()
         bot = ArautoBankBot()
         bot.run(TOKEN)
