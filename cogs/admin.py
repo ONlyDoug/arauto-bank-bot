@@ -12,23 +12,14 @@ class Admin(commands.Cog):
 
     async def initialize_database_schema(self):
         try:
-            # Criação das tabelas essenciais
+            # Estrutura de tabelas - usa $1, $2, etc. para asyncpg
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS banco (user_id BIGINT PRIMARY KEY, saldo BIGINT NOT NULL DEFAULT 0)")
-            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS transacoes (
-                id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL,
-                valor BIGINT NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            )""")
-            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS participantes (
-                evento_id INTEGER, user_id BIGINT, progresso INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (evento_id, user_id)
-            )""")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS transacoes (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL,
+                valor BIGINT NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)""")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS configuracoes (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)")
-            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS taxas (
-                user_id BIGINT PRIMARY KEY, data_vencimento DATE, status TEXT DEFAULT 'pago'
-            )""")
-            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS submissoes_orbe (
-                id SERIAL PRIMARY KEY, message_id BIGINT, cor TEXT NOT NULL, valor_total INTEGER NOT NULL,
-                autor_id BIGINT, membros TEXT, status TEXT DEFAULT 'pendente'
-            )""")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS taxas (user_id BIGINT PRIMARY KEY, data_vencimento DATE, status TEXT DEFAULT 'pago')""")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS submissoes_orbe (id SERIAL PRIMARY KEY, message_id BIGINT, cor TEXT NOT NULL,
+                valor_total INTEGER NOT NULL, autor_id BIGINT, membros TEXT, status TEXT DEFAULT 'pendente')""")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS loja (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS renda_passiva_log (user_id BIGINT, tipo TEXT, data DATE, valor INTEGER, PRIMARY KEY (user_id, tipo, data))")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS submissoes_taxa (message_id BIGINT PRIMARY KEY, user_id BIGINT, status TEXT)")
@@ -36,7 +27,6 @@ class Admin(commands.Cog):
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS reacoes_anuncios (user_id BIGINT, message_id BIGINT, PRIMARY KEY (user_id, message_id))")
 
             # --- ATUALIZAÇÃO ESTRUTURAL DA TABELA DE EVENTOS ---
-            # Garante que a tabela 'eventos' existe com as novas colunas cargo_requerido_id e canal_voz_id
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS eventos (
                     id SERIAL PRIMARY KEY,
@@ -56,13 +46,12 @@ class Admin(commands.Cog):
                 )
             """)
             try:
-                # Tenta adicionar as novas colunas se a tabela já existir em formato antigo
+                # Garante que as colunas existem, mesmo que a tabela já tenha sido criada
                 await self.bot.db_manager.execute_query("ALTER TABLE eventos ADD COLUMN IF NOT EXISTS cargo_requerido_id BIGINT")
                 await self.bot.db_manager.execute_query("ALTER TABLE eventos ADD COLUMN IF NOT EXISTS canal_voz_id BIGINT")
             except Exception as e:
-                print(f"Nota de migração: Não foi possível adicionar novas colunas a 'eventos'. Podem já existir. Erro: {e}")
+                print(f"Nota de migração: Não foi possível adicionar colunas a 'eventos'. Erro: {e}")
 
-            # Valores padrão de configuração
             default_configs = {
                 'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
                 'taxa_semanal_valor': '500', 'taxa_dia_semana': '6', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
@@ -78,16 +67,11 @@ class Admin(commands.Cog):
             }
 
             for chave, valor in default_configs.items():
-                await self.bot.db_manager.execute_query(
-                    "INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING",
-                    chave, valor
-                )
+                await self.bot.db_manager.execute_query("INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING", chave, valor)
 
-            await self.bot.db_manager.execute_query(
-                "INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", 1
-            )
+            await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", 1)
 
-            print("Base de dados verificada e pronta (Estrutura de Eventos atualizada com cargos e canais de voz).")
+            print("Base de dados Supabase verificada e pronta (Estrutura de Eventos v2.2 com cargos e voz).")
         except Exception as e:
             print(f"❌ Ocorreu um erro ao inicializar a base de dados: {e}")
             raise e

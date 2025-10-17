@@ -1,11 +1,12 @@
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands
 import datetime
 from typing import Optional
 from utils.permissions import app_check_permission_level, check_permission_level
 
-# --- Classes de Interface (Formulário e Botões) ---
+# --- CLASSES DE INTERFACE (FORMULÁRIO E BOTÕES) ---
+
 class FormularioEvento(discord.ui.Modal, title='Agendar Novo Evento'):
     nome = discord.ui.TextInput(label='Nome do Evento', placeholder='Ex: Defesa de Território em MR')
     data_hora = discord.ui.TextInput(label='Data e Hora (AAAA-MM-DD HH:MM)', placeholder='Ex: 2025-10-18 21:00')
@@ -23,47 +24,32 @@ class EventoView(discord.ui.View):
         self.evento_id = evento_id
 
     async def atualizar_embed(self, interaction: discord.Interaction):
-        evento = await self.bot.db_manager.execute_query(
-            "SELECT * FROM eventos WHERE id = $1", self.evento_id, fetch="one"
-        )
-        if not evento or evento.get('status') in ['FINALIZADO', 'CANCELADO']:
+        evento = await self.bot.db_manager.execute_query("SELECT * FROM eventos WHERE id = $1", self.evento_id, fetch="one")
+        if not evento or evento['status'] in ['FINALIZADO', 'CANCELADO']:
             self.clear_items()
             embed = interaction.message.embeds[0]
             if evento:
                 embed.color = discord.Color.dark_grey()
-                embed.set_footer(text=f"ID do Evento: {self.evento_id} | Status: {evento.get('status')}")
             await interaction.message.edit(embed=embed, view=self)
             return
 
-        embed = discord.Embed(
-            title=f"[{(evento.get('tipo_evento') or '').upper()}] {evento.get('nome')}",
-            description=evento.get('descricao') or "Sem detalhes adicionais.",
-            color=discord.Color.blue() if evento.get('status') == 'AGENDADO' else discord.Color.green()
-        )
-
-        # Exibe cargo requerido se existir
-        if evento.get('cargo_requerido_id'):
+        embed = discord.Embed(title=f"[{evento['tipo_evento'].upper()}] {evento['nome']}", description=evento['descricao'] or "Sem detalhes.", color=discord.Color.blue())
+        
+        if evento['cargo_requerido_id']:
             embed.add_field(name="🎯 Exclusivo para", value=f"<@&{evento['cargo_requerido_id']}>", inline=False)
-
-        # Exibe canal de voz se existir (nova lógica)
-        if evento.get('canal_voz_id'):
+        if evento['canal_voz_id']:
             embed.add_field(name="🔊 Canal de Voz", value=f"<#{evento['canal_voz_id']}>", inline=False)
-
-        if evento.get('data_evento'):
-            try:
-                embed.add_field(name="🗓️ Data e Hora", value=f"<t:{int(evento['data_evento'].timestamp())}:F>")
-            except Exception:
-                pass
-
-        if evento.get('recompensa', 0) > 0:
-            embed.add_field(name="💰 Recompensa", value=f"`{evento['recompensa']}` 🪙 por participante")
-
-        inscritos = evento.get('inscritos') or []
+            
+        embed.add_field(name="🗓️ Data e Hora", value=f"<t:{int(evento['data_evento'].timestamp())}:F>")
+        if evento['recompensa'] > 0:
+            embed.add_field(name="💰 Recompensa", value=f"`{evento['recompensa']}` 🪙")
+        
+        inscritos = evento['inscritos'] or []
         vagas_texto = f"{len(inscritos)}"
-        if evento.get('max_participantes'):
+        if evento['max_participantes']:
             vagas_texto += f" / {evento['max_participantes']}"
         embed.add_field(name="👥 Inscritos", value=vagas_texto)
-
+        
         lista_inscritos = "Ninguém se inscreveu ainda."
         if inscritos:
             mencoes = [f"<@{user_id}>" for user_id in inscritos]
@@ -71,110 +57,60 @@ class EventoView(discord.ui.View):
             if len(mencoes) > 15:
                 lista_inscritos += f"\n... e mais {len(mencoes) - 15}."
         embed.add_field(name="Lista de Presença", value=lista_inscritos, inline=False)
-
-        embed.set_footer(text=f"ID do Evento: {self.evento_id} | Status: {evento.get('status')}")
+        embed.set_footer(text=f"ID do Evento: {self.evento_id} | Status: {evento['status']}")
+        
         await interaction.message.edit(embed=embed, view=self)
 
     @discord.ui.button(label="Inscrever-se", style=discord.ButtonStyle.success, custom_id="inscrever_evento")
     async def inscrever(self, interaction: discord.Interaction, button: discord.ui.Button):
         user = interaction.user
-
-        evento = await self.bot.db_manager.execute_query(
-            "SELECT cargo_requerido_id, max_participantes, inscritos FROM eventos WHERE id = $1", self.evento_id, fetch="one"
-        )
-
-        if evento and evento.get('cargo_requerido_id'):
-            try:
-                cargo_req_id = int(evento['cargo_requerido_id'])
-            except Exception:
-                cargo_req_id = None
-            cargo_requerido = discord.utils.get(user.roles, id=cargo_req_id) if cargo_req_id else None
+        evento = await self.bot.db_manager.execute_query("SELECT cargo_requerido_id, inscritos FROM eventos WHERE id = $1", self.evento_id, fetch="one")
+        
+        if evento['cargo_requerido_id']:
+            cargo_requerido = discord.utils.get(user.roles, id=evento['cargo_requerido_id'])
             if not cargo_requerido:
-                if not interaction.response.is_done():
-                    await interaction.response.send_message(f"❌ Este evento é exclusivo para o cargo <@&{evento['cargo_requerido_id']}> e você não o possui.", ephemeral=True)
-                else:
-                    await interaction.followup.send(f"❌ Este evento é exclusivo para o cargo <@&{evento['cargo_requerido_id']}> e você não o possui.", ephemeral=True)
+                await interaction.response.send_message(f"❌ Este evento é exclusivo para o cargo <@&{evento['cargo_requerido_id']}> e você não o possui.", ephemeral=True)
                 return
 
-        await self.bot.db_manager.execute_query(
-            "UPDATE eventos SET inscritos = array_append(inscritos, $1) WHERE id = $2 AND NOT ($1 = ANY(inscritos))",
-            user.id, self.evento_id
-        )
+        await self.bot.db_manager.execute_query("UPDATE eventos SET inscritos = array_append(inscritos, $1) WHERE id = $2 AND NOT ($1 = ANY(inscritos))", user.id, self.evento_id)
         await self.atualizar_embed(interaction)
-        if not interaction.response.is_done():
-            await interaction.response.send_message("Você foi inscrito no evento!", ephemeral=True, delete_after=5)
-        else:
-            await interaction.followup.send("Você foi inscrito no evento!", ephemeral=True, delete_after=5)
+        await interaction.followup.send("Você foi inscrito no evento!", ephemeral=True, delete_after=5)
 
     @discord.ui.button(label="Remover Inscrição", style=discord.ButtonStyle.danger, custom_id="remover_inscricao_evento")
     async def remover_inscricao(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
-        await self.bot.db_manager.execute_query(
-            "UPDATE eventos SET inscritos = array_remove(inscritos, $1) WHERE id = $2",
-            user_id, self.evento_id
-        )
+        await self.bot.db_manager.execute_query("UPDATE eventos SET inscritos = array_remove(inscritos, $1) WHERE id = $2", user_id, self.evento_id)
         await self.atualizar_embed(interaction)
-        if not interaction.response.is_done():
-            await interaction.response.send_message("Sua inscrição foi removida.", ephemeral=True, delete_after=5)
-        else:
-            await interaction.followup.send("Sua inscrição foi removida.", ephemeral=True, delete_after=5)
+        await interaction.followup.send("Sua inscrição foi removida.", ephemeral=True, delete_after=5)
 
     @discord.ui.button(label="Criar Canal de Voz", style=discord.ButtonStyle.secondary, custom_id="criar_canal_voz_evento", emoji="🎙️")
     async def criar_canal_voz(self, interaction: discord.Interaction, button: discord.ui.Button):
-        evento = await self.bot.db_manager.execute_query(
-            "SELECT criador_id, nome, canal_voz_id FROM eventos WHERE id = $1", self.evento_id, fetch="one"
-        )
-
-        if not evento:
-            await interaction.response.send_message("Evento não encontrado.", ephemeral=True, delete_after=10)
-            return
-
-        # Apenas o criador pode criar o canal
-        if interaction.user.id != evento.get('criador_id'):
+        evento = await self.bot.db_manager.execute_query("SELECT criador_id, nome, canal_voz_id FROM eventos WHERE id = $1", self.evento_id, fetch="one")
+        if interaction.user.id != evento['criador_id']:
             await interaction.response.send_message("Apenas o organizador do evento pode usar este botão.", ephemeral=True, delete_after=10)
             return
-
-        # Verifica se já existe canal de voz
-        if evento.get('canal_voz_id'):
+        if evento['canal_voz_id']:
             await interaction.response.send_message("O canal de voz para este evento já foi criado.", ephemeral=True, delete_after=10)
             return
-
         await interaction.response.defer(ephemeral=True)
-
         try:
             guild = interaction.guild
             canal_eventos_id = await self.bot.db_manager.get_config_value('canal_eventos', '0')
-            categoria = None
-            try:
-                if canal_eventos_id and canal_eventos_id != '0' and str(canal_eventos_id).isdigit():
-                    texto = self.bot.get_channel(int(canal_eventos_id))
-                    categoria = texto.category if texto else None
-            except Exception:
-                categoria = None
-
-            novo_canal = await guild.create_voice_channel(name=f"▶ {evento.get('nome')}", category=categoria)
-
+            categoria = self.bot.get_channel(int(canal_eventos_id)).category if canal_eventos_id != '0' else None
+            novo_canal = await guild.create_voice_channel(name=f"▶ {evento['nome']}", category=categoria)
             await self.bot.db_manager.execute_query("UPDATE eventos SET canal_voz_id = $1 WHERE id = $2", novo_canal.id, self.evento_id)
-
-            # Desabilita o botão localmente e atualiza a mensagem
             button.disabled = True
             await self.atualizar_embed(interaction)
-            try:
-                await interaction.followup.send(f"Canal de voz {novo_canal.mention} criado com sucesso!", ephemeral=True)
-            except Exception:
-                pass
-
-        except discord.Forbidden:
-            await interaction.followup.send("❌ Erro de Permissão! O bot não tem a permissão 'Gerir Canais' para executar esta ação.", ephemeral=True)
+            await interaction.followup.send(f"Canal de voz {novo_canal.mention} criado com sucesso!", ephemeral=True)
         except Exception as e:
-            await interaction.followup.send(f"Ocorreu um erro inesperado: {e}", ephemeral=True)
+            await interaction.followup.send(f"Ocorreu um erro: {e}", ephemeral=True)
 
 class Eventos(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
     @app_commands.command(name='agendarevento', description='Abre um formulário para criar um novo evento.')
-    @app_commands.describe(cargo_requerido="Selecione um cargo para restringir o evento apenas a membros com esse cargo.")
+    @app_commands.describe(cargo_requerido="[OPCIONAL] Restrinja o evento a membros com este cargo.")
     @app_check_permission_level(1)
     async def agendar_evento(self, interaction: discord.Interaction, cargo_requerido: Optional[discord.Role] = None):
         formulario = FormularioEvento()
@@ -188,25 +124,14 @@ class Eventos(commands.Cog):
         recompensa, max_participantes = 0, None
         if formulario.opcionais.value:
             for parte in formulario.opcionais.value.split():
-                if 'recompensa=' in parte:
-                    try:
-                        recompensa = int(parte.split('=')[1])
-                    except Exception:
-                        recompensa = 0
-                if 'vagas=' in parte:
-                    try:
-                        max_participantes = int(parte.split('=')[1])
-                    except Exception:
-                        max_participantes = None
-
+                if 'recompensa=' in parte: recompensa = int(parte.split('=')[1])
+                if 'vagas=' in parte: max_participantes = int(parte.split('=')[1])
         cargo_id = cargo_requerido.id if cargo_requerido else None
-
         resultado = await self.bot.db_manager.execute_query(
             """INSERT INTO eventos (nome, descricao, tipo_evento, data_evento, recompensa, max_participantes, criador_id, cargo_requerido_id)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id""",
             formulario.nome.value, formulario.descricao.value, formulario.tipo_evento.value,
-            data_evento, recompensa, max_participantes, interaction.user.id, cargo_id,
-            fetch="one"
+            data_evento, recompensa, max_participantes, interaction.user.id, cargo_id, fetch="one"
         )
         evento_id = resultado['id']
         canal_eventos_id = await self.bot.db_manager.get_config_value('canal_eventos', '0')
@@ -216,19 +141,13 @@ class Eventos(commands.Cog):
         canal = self.bot.get_channel(int(canal_eventos_id))
         if canal:
             view = EventoView(self.bot, evento_id)
-            embed = discord.Embed(
-                title=f"[{formulario.tipo_evento.value.upper()}] {formulario.nome.value}",
-                description=formulario.descricao.value or "Sem detalhes adicionais.",
-                color=discord.Color.blue()
-            )
+            embed = discord.Embed(title=f"[{formulario.tipo_evento.value.upper()}] {formulario.nome.value}", description=formulario.descricao.value or "Sem detalhes.", color=discord.Color.blue())
             if cargo_requerido:
                 embed.add_field(name="🎯 Exclusivo para", value=cargo_requerido.mention, inline=False)
             embed.add_field(name="🗓️ Data e Hora", value=f"<t:{int(data_evento.timestamp())}:F>")
-            if recompensa > 0:
-                embed.add_field(name="💰 Recompensa", value=f"`{recompensa}` 🪙 por participante")
+            if recompensa > 0: embed.add_field(name="💰 Recompensa", value=f"`{recompensa}` 🪙")
             vagas_texto = "Ilimitadas"
-            if max_participantes:
-                vagas_texto = f"0 / {max_participantes}"
+            if max_participantes: vagas_texto = f"0 / {max_participantes}"
             embed.add_field(name="👥 Inscritos", value=vagas_texto)
             embed.set_footer(text=f"ID do Evento: {evento_id} | Organizado por: {interaction.user.display_name}")
             msg = await canal.send(embed=embed, view=view)
@@ -237,6 +156,7 @@ class Eventos(commands.Cog):
         else:
             await interaction.followup.send("❌ Canal de eventos configurado mas não encontrado.", ephemeral=True)
 
-    # os outros comandos (eventos, iniciarevento, cancelarevento, finalizarevento, premiar_manual) permanecem inalterados
+    # (Os outros comandos como !eventos, !finalizarevento, etc. permanecem aqui)
+
 async def setup(bot):
     await bot.add_cog(Eventos(bot))
