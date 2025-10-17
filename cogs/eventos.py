@@ -5,17 +5,7 @@ import datetime
 from typing import Optional
 from utils.permissions import app_check_permission_level, check_permission_level
 
-# --- CLASSES DE INTERFACE (FORMULÁRIO E BOTÕES) ---
-
-class FormularioEvento(discord.ui.Modal, title='Agendar Novo Evento'):
-    nome = discord.ui.TextInput(label='Nome do Evento', placeholder='Ex: Defesa de Território em MR')
-    data_hora = discord.ui.TextInput(label='Data e Hora (AAAA-MM-DD HH:MM)', placeholder='Ex: 2025-10-18 21:00')
-    tipo_evento = discord.ui.TextInput(label='Tipo de Conteúdo', placeholder='ZvZ, DG AVA, Gank, Reunião, Outro...')
-    descricao = discord.ui.TextInput(label='Descrição e Requisitos', style=discord.TextStyle.paragraph, placeholder='IP Mínimo: 1400, Ponto de Encontro: HO de MR...', required=False)
-    opcionais = discord.ui.TextInput(label='Opcionais (Recompensa, Vagas)', placeholder='Ex: recompensa=100 vagas=20', required=False)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+# --- A CLASSE DE FORMULÁRIO FOI REMOVIDA ---
 
 class EventoView(discord.ui.View):
     def __init__(self, bot, evento_id):
@@ -30,6 +20,7 @@ class EventoView(discord.ui.View):
             embed = interaction.message.embeds[0]
             if evento:
                 embed.color = discord.Color.dark_grey()
+                embed.set_footer(text=f"ID do Evento: {self.evento_id} | Status: {evento['status']}")
             await interaction.message.edit(embed=embed, view=self)
             return
 
@@ -109,54 +100,68 @@ class Eventos(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name='agendarevento', description='Abre um formulário para criar um novo evento.')
-    @app_commands.describe(cargo_requerido="[OPCIONAL] Restrinja o evento a membros com este cargo.")
+    @app_commands.command(name='agendarevento', description='Agenda um novo evento da guilda com todas as opções.')
+    @app_commands.describe(
+        nome='O nome do evento. Ex: Defesa de Território',
+        data_hora='A data e hora do evento. Formato: AAAA-MM-DD HH:MM',
+        tipo='O tipo de conteúdo. Ex: ZvZ, DG AVA, Gank, Reunião',
+        descricao='[OPCIONAL] Detalhes do evento, como IP mínimo e ponto de encontro.',
+        recompensa='[OPCIONAL] A recompensa em moedas para cada participante.',
+        vagas='[OPCIONAL] O número máximo de vagas para o evento.',
+        cargo_requerido='[OPCIONAL] Restringe o evento a membros com este cargo.'
+    )
     @app_check_permission_level(1)
-    async def agendar_evento(self, interaction: discord.Interaction, cargo_requerido: Optional[discord.Role] = None):
-        formulario = FormularioEvento()
-        await interaction.response.send_modal(formulario)
-        await formulario.wait()
+    async def agendar_evento(
+        self, 
+        interaction: discord.Interaction, 
+        nome: str, 
+        data_hora: str, 
+        tipo: str,
+        descricao: Optional[str] = None,
+        recompensa: Optional[int] = 0,
+        vagas: Optional[int] = None,
+        cargo_requerido: Optional[discord.Role] = None
+    ):
+        await interaction.response.defer(ephemeral=True)
         try:
-            data_evento = datetime.datetime.strptime(formulario.data_hora.value, '%Y-%m-%d %H:%M').astimezone()
+            data_evento = datetime.datetime.strptime(data_hora, '%Y-%m-%d %H:%M').astimezone()
         except ValueError:
-            await interaction.followup.send("❌ Formato de data e hora inválido.", ephemeral=True)
+            await interaction.followup.send("❌ Formato de data e hora inválido. Use `AAAA-MM-DD HH:MM`.", ephemeral=True)
             return
-        recompensa, max_participantes = 0, None
-        if formulario.opcionais.value:
-            for parte in formulario.opcionais.value.split():
-                if 'recompensa=' in parte: recompensa = int(parte.split('=')[1])
-                if 'vagas=' in parte: max_participantes = int(parte.split('=')[1])
+
         cargo_id = cargo_requerido.id if cargo_requerido else None
+
         resultado = await self.bot.db_manager.execute_query(
             """INSERT INTO eventos (nome, descricao, tipo_evento, data_evento, recompensa, max_participantes, criador_id, cargo_requerido_id)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id""",
-            formulario.nome.value, formulario.descricao.value, formulario.tipo_evento.value,
-            data_evento, recompensa, max_participantes, interaction.user.id, cargo_id, fetch="one"
+            nome, descricao, tipo, data_evento, recompensa, vagas, interaction.user.id, cargo_id, fetch="one"
         )
         evento_id = resultado['id']
+        
         canal_eventos_id = await self.bot.db_manager.get_config_value('canal_eventos', '0')
         if canal_eventos_id == '0':
             await interaction.followup.send("✅ Evento agendado, mas o canal de eventos não está configurado!", ephemeral=True)
             return
+
         canal = self.bot.get_channel(int(canal_eventos_id))
         if canal:
             view = EventoView(self.bot, evento_id)
-            embed = discord.Embed(title=f"[{formulario.tipo_evento.value.upper()}] {formulario.nome.value}", description=formulario.descricao.value or "Sem detalhes.", color=discord.Color.blue())
+            embed = discord.Embed(title=f"[{tipo.upper()}] {nome}", description=descricao or "Sem detalhes.", color=discord.Color.blue())
             if cargo_requerido:
                 embed.add_field(name="🎯 Exclusivo para", value=cargo_requerido.mention, inline=False)
             embed.add_field(name="🗓️ Data e Hora", value=f"<t:{int(data_evento.timestamp())}:F>")
             if recompensa > 0: embed.add_field(name="💰 Recompensa", value=f"`{recompensa}` 🪙")
             vagas_texto = "Ilimitadas"
-            if max_participantes: vagas_texto = f"0 / {max_participantes}"
+            if vagas: vagas_texto = f"0 / {vagas}"
             embed.add_field(name="👥 Inscritos", value=vagas_texto)
             embed.set_footer(text=f"ID do Evento: {evento_id} | Organizado por: {interaction.user.display_name}")
             msg = await canal.send(embed=embed, view=view)
             await self.bot.db_manager.execute_query("UPDATE eventos SET message_id = $1 WHERE id = $2", msg.id, evento_id)
-            await interaction.followup.send(f"✅ Evento agendado com sucesso em {canal.mention}!", ephemeral=True)
+            await interaction.followup.send(f"✅ Evento **{nome}** agendado com sucesso em {canal.mention}!", ephemeral=True)
         else:
             await interaction.followup.send("❌ Canal de eventos configurado mas não encontrado.", ephemeral=True)
 
-    # (Os outros comandos como !eventos, !finalizarevento, etc. permanecem aqui)
+    # (Todos os outros comandos de eventos, como !eventos, !finalizarevento, etc. permanecem aqui inalterados)
 
 async def setup(bot):
     await bot.add_cog(Eventos(bot))
