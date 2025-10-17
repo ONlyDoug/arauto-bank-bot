@@ -19,6 +19,7 @@ class DetalhesEventoModal(discord.ui.Modal, title='Detalhes Essenciais do Evento
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
+            # Parse da data; astimezone() mantido para compatibilidade caso haja tz
             self.view.evento_data['data_evento'] = datetime.datetime.strptime(self.data_hora.value, '%Y-%m-%d %H:%M').astimezone()
             self.view.evento_data['nome'] = self.nome.value
             self.view.evento_data['tipo_evento'] = self.tipo_evento.value
@@ -110,7 +111,6 @@ class EventoView(discord.ui.View):
         if not evento:
             await interaction.response.send_message("Evento não encontrado.", ephemeral=True)
             return
-        # cargo check
         cargo_id = evento.get('cargo_requerido_id')
         if cargo_id:
             has = any(r.id == int(cargo_id) for r in interaction.user.roles)
@@ -137,7 +137,6 @@ class EventoView(discord.ui.View):
         if interaction.user.id != self.criador_id:
             await interaction.response.send_message("Apenas o organizador pode gerir o evento.", ephemeral=True)
             return
-        # painel de gestão simplificado (pode ser expandido)
         view = discord.ui.View(timeout=1800)
         await interaction.response.send_message("Painel de gestão disponível.", ephemeral=True, view=view)
 
@@ -195,6 +194,7 @@ class CriacaoEventoView(discord.ui.View):
 
     @discord.ui.select(cls=discord.ui.RoleSelect, placeholder="🎯 Restringir por Cargo (Opcional)", row=1, max_values=1)
     async def selecionar_cargo(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
+        # armazena o objeto Role (RoleSelect devolve roles)
         self.evento_data['cargo_requerido'] = select.values[0] if select.values else None
         await self.atualizar_preview(interaction)
 
@@ -211,13 +211,22 @@ class CriacaoEventoView(discord.ui.View):
         await interaction.response.defer()  # confirma a interação
         cargo_id = self.evento_data.get('cargo_requerido').id if self.evento_data.get('cargo_requerido') else None
 
-        resultado = await self.bot.db_manager.execute_query(
-            """INSERT INTO eventos (nome, descricao, tipo_evento, data_evento, recompensa, max_participantes, criador_id, cargo_requerido_id)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id""",
-            self.evento_data['nome'], self.evento_data.get('descricao'), self.evento_data.get('tipo_evento'),
-            self.evento_data['data_evento'], self.evento_data.get('recompensa', 0), self.evento_data.get('vagas'),
-            interaction.user.id, cargo_id, fetch="one"
-        )
+        # insere evento usando DatabaseManager (conforme convensão do projeto)
+        try:
+            resultado = await self.bot.db_manager.execute_query(
+                """INSERT INTO eventos (nome, descricao, tipo_evento, data_evento, recompensa, max_participantes, criador_id, cargo_requerido_id)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id""",
+                self.evento_data['nome'], self.evento_data.get('descricao'), self.evento_data.get('tipo_evento'),
+                self.evento_data['data_evento'], self.evento_data.get('recompensa', 0), self.evento_data.get('vagas'),
+                interaction.user.id, cargo_id, fetch="one"
+            )
+        except Exception as e:
+            try:
+                await interaction.followup.send(f"❌ Falha ao salvar o evento: {e}", ephemeral=True)
+            except Exception:
+                pass
+            return
+
         evento_id = resultado['id']
 
         canal_eventos_id = await self.bot.db_manager.get_config_value('canal_eventos', '0')
@@ -244,21 +253,79 @@ class CriacaoEventoView(discord.ui.View):
         final_embed.set_footer(text=f"ID do Evento: {evento_id} | Organizado por: {interaction.user.display_name}")
 
         if canal:
-            public_view = EventoView(self.bot, evento_id, interaction.user.id)
-            msg = await canal.send(embed=final_embed, view=public_view)
-            await self.bot.db_manager.execute_query("UPDATE eventos SET message_id = $1 WHERE id = $2", msg.id, evento_id)
-            # tentar editar resposta original; se falhar, enviar followup
             try:
-                await interaction.edit_original_response(content=f"✅ Evento publicado com sucesso em {canal.mention}!", embed=None, view=None)
-            except Exception:
+                public_view = EventoView(self.bot, evento_id, interaction.user.id)
+                msg = await canal.send(embed=final_embed, view=public_view)
+                await self.bot.db_manager.execute_query("UPDATE eventos SET message_id = $1 WHERE id = $2", msg.id, evento_id)
                 try:
-                    await interaction.followup.send(f"✅ Evento publicado em {canal.mention}!", ephemeral=True)
+                    await interaction.edit_original_response(content=f"✅ Evento publicado com sucesso em {canal.mention}!", embed=None, view=None)
+                except Exception:
+                    try:
+                        await interaction.followup.send(f"✅ Evento publicado em {canal.mention}!", ephemeral=True)
+                    except Exception:
+                        pass
+            except Exception as e:
+                try:
+                    await interaction.followup.send(f"❌ Falha ao publicar no canal de eventos: {e}", ephemeral=True)
                 except Exception:
                     pass
         else:
             try:
-                await interaction.edit_original_response(content="❌ O canal de eventos não está configurado!", embed=None, view=None)
+                await interaction.followup.send("❌ O canal de eventos não está configurado! Evento salvo apenas no banco.", ephemeral=True)
             except Exception:
+                pass
+
+        self.stop()
+
+    @discord.ui.button(label="✖️ Cancelar", style=discord.ButtonStyle.danger, row=3)
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await interaction.response.edit_message(content="Criação de evento cancelada.", embed=None, view=None)
+        except Exception:
+            try:
+                await interaction.edit_original_response(content="Criação de evento cancelada.", embed=None, view=None)
+            except Exception:
+                pass
+        self.stop()
+
+# --- COG PRINCIPAL ---
+class Eventos(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @commands.command(name='agendarevento', help='Inicia o assistente para criar um novo evento.')
+    @check_permission_level(1)
+    async def agendarevento(self, ctx: commands.Context):
+        view = CriacaoEventoView(self.bot, ctx.author)
+        embed = discord.Embed(title="Assistente de Criação de Eventos", description="Use os botões abaixo para configurar o seu evento.", color=discord.Color.yellow())
+
+        # tenta deletar a mensagem de comando para limpar chat (pode falhar por permissões)
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+
+        # prioriza enviar por DM; se falhar, publica no canal (com aviso)
+        try:
+            await ctx.author.send(embed=embed, view=view)
+            try:
+                await ctx.message.add_reaction("✅")
+            except Exception:
+                pass
+            try:
+                info = await ctx.send("✅ Assistente enviado por DM. Verifique suas mensagens privadas.")
+                await info.delete(delay=10)
+            except Exception:
+                pass
+        except discord.Forbidden:
+            # fallback: envia no canal onde o comando foi usado
+            try:
+                await ctx.send(embed=embed, view=view)
+            except Exception as e:
                 try:
-                    await interaction.followup.send("❌ O canal de eventos não está configurado!", ephemeral=True)
-               
+                    await ctx.send(f"❌ Falha ao iniciar o assistente: {e}", delete_after=10)
+                except Exception:
+                    pass
+
+async def setup(bot):
+    await bot.add_cog(Eventos(bot))
