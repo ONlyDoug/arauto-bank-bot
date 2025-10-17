@@ -62,21 +62,33 @@ class CriacaoEventoView(discord.ui.View):
     async def atualizar_preview(self, interaction: discord.Interaction):
         embed = discord.Embed(title="Pré-visualização do Evento", color=discord.Color.yellow())
         publish_button = discord.utils.get(self.children, custom_id="publicar_evento")
-        publish_button.disabled = True
+        if publish_button:
+            publish_button.disabled = True
         if self.evento_data.get('nome') and self.evento_data.get('data_evento'):
             embed.title = f"[{self.evento_data.get('tipo_evento', 'INDEFINIDO').upper()}] {self.evento_data['nome']}"
             embed.description = self.evento_data.get('descricao', 'Sem detalhes.')
-            embed.add_field(name="🗓️ Data e Hora", value=f"<t:{int(self.evento_data['data_evento'].timestamp())}:F>")
-            publish_button.disabled = False
+            try:
+                embed.add_field(name="🗓️ Data e Hora", value=f"<t:{int(self.evento_data['data_evento'].timestamp())}:F>")
+            except Exception:
+                pass
+            if publish_button:
+                publish_button.disabled = False
         else:
             embed.description = "Preencha os detalhes essenciais para poder publicar."
         if self.evento_data.get('cargo_requerido'):
             embed.add_field(name="🎯 Exclusivo para", value=self.evento_data['cargo_requerido'].mention)
-        if self.evento_data.get('recompensa'):
+        if self.evento_data.get('recompensa') is not None:
             embed.add_field(name="💰 Recompensa", value=f"`{self.evento_data['recompensa']}` 🪙")
-        if self.evento_data.get('vagas'):
+        if self.evento_data.get('vagas') is not None:
             embed.add_field(name="👥 Vagas", value=f"{self.evento_data['vagas']}")
-        await interaction.response.edit_message(embed=embed, view=self)
+        # sempre verificar se a resposta ainda está aberta; alguns fluxos (modal) já respondem
+        try:
+            await interaction.response.edit_message(embed=embed, view=self)
+        except Exception:
+            try:
+                await interaction.followup.edit_message(interaction.message.id, embed=embed, view=self)
+            except Exception:
+                pass
 
     @discord.ui.button(label="📝 Detalhes", style=discord.ButtonStyle.primary, row=0)
     async def definir_detalhes(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -95,9 +107,16 @@ class CriacaoEventoView(discord.ui.View):
     async def publicar_evento(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         # Lógica de publicação...
+        # inserir na DB via DatabaseManager (conforme copilot-instructions) e publicar no canal configurado
     @discord.ui.button(label="✖️ Cancelar", style=discord.ButtonStyle.danger, row=3)
     async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="Criação de evento cancelada.", embed=None, view=None)
+        try:
+            await interaction.response.edit_message(content="Criação de evento cancelada.", embed=None, view=None)
+        except Exception:
+            try:
+                await interaction.edit_original_response(content="Criação de evento cancelada.", embed=None, view=None)
+            except Exception:
+                pass
         self.stop()
 
 class Eventos(commands.Cog):
@@ -109,8 +128,25 @@ class Eventos(commands.Cog):
     async def agendarevento(self, ctx: commands.Context):
         view = CriacaoEventoView(self.bot, ctx.author)
         embed = discord.Embed(title="Assistente de Criação de Eventos", description="Use os botões abaixo para configurar o seu evento.", color=discord.Color.yellow())
-        await ctx.message.delete()
-        await ctx.send(embed=embed, view=view, ephemeral=True)
+        # tenta deletar a mensagem de comando para limpar chat (pode falhar por permissões)
+        try:
+            await ctx.message.delete()
+        except Exception:
+            pass
+        # prioriza enviar por DM (comportamento "ephemeral-like"); se falhar, publica no canal
+        try:
+            await ctx.author.send(embed=embed, view=view)
+            try:
+                await ctx.message.add_reaction("✅")
+            except Exception:
+                pass
+            await ctx.send("✅ Assistente enviado por DM. Verifique suas mensagens privadas.", delete_after=10)
+        except discord.Forbidden:
+            # fallback: envia no canal (não é ephemeral para comandos prefix)
+            try:
+                await ctx.send(embed=embed, view=view)
+            except Exception as e:
+                await ctx.send(f"❌ Falha ao iniciar o assistente: {e}", delete_after=10)
 
     # ... (outros comandos de eventos aqui)
 
