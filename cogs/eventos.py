@@ -265,12 +265,26 @@ class Eventos(commands.Cog):
     async def agendarevento(self, ctx: commands.Context):
         view = CriacaoEventoView(self.bot, ctx.author)
         embed = discord.Embed(title="Assistente de Criação de Eventos", description="Use os botões abaixo para configurar o seu evento. Quando terminar, clique em 'Publicar'.", color=discord.Color.yellow())
+        
+        # Prioriza enviar por DM (ephemeral-like). Se falhar, abre o assistente no canal.
         try:
             await ctx.author.send(embed=embed, view=view)
-            await ctx.message.add_reaction("✅")
-            await ctx.send("O assistente de criação de eventos foi enviado para a sua mensagem privada!", delete_after=10)
+            try:
+                await ctx.message.add_reaction("✅")
+            except Exception:
+                pass
+            await ctx.send("✅ Assistente enviado por DM. Verifique suas mensagens privadas.", delete_after=10)
         except discord.Forbidden:
-            await ctx.send("❌ Não foi possível enviar DM. Verifique suas configurações de privacidade.", delete_after=10)
+            # Não é possível enviar DM — envia no canal público (não é ephemeral porque comandos prefix não suportam).
+            try:
+                await ctx.send(embed=embed, view=view)
+                try:
+                    await ctx.message.add_reaction("✅")
+                except Exception:
+                    pass
+                await ctx.send("⚠️ Não foi possível enviar DM. Assistente aberto no canal.", delete_after=10)
+            except Exception as e:
+                await ctx.send(f"❌ Falha ao iniciar o assistente: {e}", delete_after=10)
 
 async def setup(bot):
     await bot.add_cog(Eventos(bot))
