@@ -7,23 +7,52 @@ from utils.permissions import check_permission_level
 # --- CLASSES DE INTERFACE PARA O ASSISTENTE GUIADO ---
 
 class DetalhesEventoModal(discord.ui.Modal, title='Detalhes Essenciais do Evento'):
+    def __init__(self, view):
+        super().__init__()
+        self.view = view  # Guarda referência à View principal
+
     nome = discord.ui.TextInput(label='Nome do Evento', placeholder='Ex: Defesa de Território em MR')
     data_hora = discord.ui.TextInput(label='Data e Hora (AAAA-MM-DD HH:MM)', placeholder='Ex: 2025-10-18 21:00')
     tipo_evento = discord.ui.TextInput(label='Tipo de Conteúdo', placeholder='ZvZ, DG AVA, Gank, Reunião, Outro...')
     descricao = discord.ui.TextInput(label='Descrição e Requisitos', style=discord.TextStyle.paragraph, placeholder='IP Mínimo: 1400...', required=False)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        try:
+            self.view.evento_data['data_evento'] = datetime.datetime.strptime(self.data_hora.value, '%Y-%m-%d %H:%M').astimezone()
+            self.view.evento_data['nome'] = self.nome.value
+            self.view.evento_data['tipo_evento'] = self.tipo_evento.value
+            self.view.evento_data['descricao'] = self.descricao.value
+            await self.view.atualizar_preview(interaction)
+        except (ValueError, TypeError):
+            await interaction.response.send_message("❌ Formato de data inválido. Use `AAAA-MM-DD HH:MM`.", ephemeral=True)
 
 class RecompensaModal(discord.ui.Modal, title='Definir Recompensa'):
-    recompensa = discord.ui.TextInput(label='Recompensa por participante (apenas números)', placeholder='Digite 0 ou deixe em branco para remover.')
+    def __init__(self, view):
+        super().__init__()
+        self.view = view
+
+    recompensa = discord.ui.TextInput(label='Recompensa por participante (apenas números)', placeholder='Digite 0 para remover. Ex: 100', required=False)
+
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        try:
+            self.view.evento_data['recompensa'] = int(self.recompensa.value) if (self.recompensa.value and self.recompensa.value.strip() != "") else None
+            await self.view.atualizar_preview(interaction)
+        except ValueError:
+            await interaction.response.send_message("❌ A recompensa deve ser um número.", ephemeral=True)
 
 class VagasModal(discord.ui.Modal, title='Definir Limite de Vagas'):
-    vagas = discord.ui.TextInput(label='Número máximo de vagas (apenas números)', placeholder='Deixe em branco para remover o limite.')
+    def __init__(self, view):
+        super().__init__()
+        self.view = view
+
+    vagas = discord.ui.TextInput(label='Número máximo de vagas (apenas números)', placeholder='Deixe em branco para remover o limite.', required=False)
+
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        try:
+            self.view.evento_data['vagas'] = int(self.vagas.value) if (self.vagas.value and self.vagas.value.strip() != "") else None
+            await self.view.atualizar_preview(interaction)
+        except ValueError:
+            await interaction.response.send_message("❌ O número de vagas deve ser um número.", ephemeral=True)
 
 class EventoView(discord.ui.View):
     def __init__(self, bot, evento_id):
@@ -110,9 +139,9 @@ class EventoView(discord.ui.View):
         await self.atualizar_embed(interaction)
         # resposta ephemeral
         if not interaction.response.is_done():
-            await interaction.response.send_message("Você foi inscrito no evento!", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("Você foi inscrito no evento!", ephemeral=True)
         else:
-            await interaction.followup.send("Você foi inscrito no evento!", ephemeral=True, delete_after=5)
+            await interaction.followup.send("Você foi inscrito no evento!", ephemeral=True)
 
     @discord.ui.button(label="Remover Inscrição", style=discord.ButtonStyle.danger, custom_id="remover_inscricao_evento")
     async def remover_inscricao(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -120,9 +149,9 @@ class EventoView(discord.ui.View):
         await self.bot.db_manager.execute_query("UPDATE eventos SET inscritos = array_remove(inscritos, $1) WHERE id = $2", user_id, self.evento_id)
         await self.atualizar_embed(interaction)
         if not interaction.response.is_done():
-            await interaction.response.send_message("Sua inscrição foi removida.", ephemeral=True, delete_after=5)
+            await interaction.response.send_message("Sua inscrição foi removida.", ephemeral=True)
         else:
-            await interaction.followup.send("Sua inscrição foi removida.", ephemeral=True, delete_after=5)
+            await interaction.followup.send("Sua inscrição foi removida.", ephemeral=True)
 
     @discord.ui.button(label="Criar Canal de Voz", style=discord.ButtonStyle.secondary, custom_id="criar_canal_voz_evento", emoji="🎙️")
     async def criar_canal_voz(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -133,11 +162,11 @@ class EventoView(discord.ui.View):
 
         # Apenas o criador pode criar o canal
         if interaction.user.id != evento.get('criador_id'):
-            await interaction.response.send_message("Apenas o organizador do evento pode usar este botão.", ephemeral=True, delete_after=10)
+            await interaction.response.send_message("Apenas o organizador do evento pode usar este botão.", ephemeral=True)
             return
 
         if evento.get('canal_voz_id'):
-            await interaction.response.send_message("O canal de voz para este evento já foi criado.", ephemeral=True, delete_after=10)
+            await interaction.response.send_message("O canal de voz para este evento já foi criado.", ephemeral=True)
             return
 
         await interaction.response.defer(ephemeral=True)
@@ -158,10 +187,7 @@ class EventoView(discord.ui.View):
             # Desabilita o botão localmente e atualiza a mensagem
             button.disabled = True
             await self.atualizar_embed(interaction)
-            try:
-                await interaction.followup.send(f"Canal de voz {novo_canal.mention} criado com sucesso!", ephemeral=True)
-            except Exception:
-                pass
+            await interaction.followup.send(f"Canal de voz {novo_canal.mention} criado com sucesso!", ephemeral=True)
 
         except discord.Forbidden:
             await interaction.followup.send("❌ Erro de Permissão! O bot não tem a permissão 'Gerir Canais'.", ephemeral=True)
@@ -170,10 +196,10 @@ class EventoView(discord.ui.View):
 
 class CriacaoEventoView(discord.ui.View):
     def __init__(self, bot, author):
-        super().__init__(timeout=1800) # O painel expira após 30 minutos
+        super().__init__(timeout=1800)  # painel expira após 30 minutos
         self.bot = bot
         self.author = author
-        self.evento_data = {} # Dicionário para guardar os dados do evento em criação
+        self.evento_data = {}  # dados do evento em criação
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.author.id:
@@ -197,7 +223,7 @@ class CriacaoEventoView(discord.ui.View):
             if publish_button:
                 publish_button.disabled = False
         else:
-            embed.description = "Preencha os detalhes essenciais (Nome, Data e Tipo) para poder publicar."
+            embed.description = "Preencha os detalhes essenciais para poder publicar."
 
         if self.evento_data.get('cargo_requerido'):
             embed.add_field(name="🎯 Exclusivo para", value=self.evento_data['cargo_requerido'].mention)
@@ -210,61 +236,25 @@ class CriacaoEventoView(discord.ui.View):
 
     @discord.ui.button(label="📝 Detalhes", style=discord.ButtonStyle.primary, row=0)
     async def definir_detalhes(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = DetalhesEventoModal()
-        await interaction.response.send_modal(modal)
-        await modal.wait()
-        try:
-            self.evento_data['data_evento'] = datetime.datetime.strptime(modal.data_hora.value, '%Y-%m-%d %H:%M').astimezone()
-            self.evento_data['nome'] = modal.nome.value
-            self.evento_data['tipo_evento'] = modal.tipo_evento.value
-            self.evento_data['descricao'] = modal.descricao.value
-            await self.atualizar_preview(interaction)
-        except (ValueError, TypeError):
-            await interaction.followup.send("❌ Formato de data inválido. Use `AAAA-MM-DD HH:MM`.", ephemeral=True)
+        await interaction.response.send_modal(DetalhesEventoModal(self))
 
     @discord.ui.select(cls=discord.ui.RoleSelect, placeholder="🎯 Restringir por Cargo (Opcional)", row=1, max_values=1)
     async def selecionar_cargo(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
-        if select.values:
-            self.evento_data['cargo_requerido'] = select.values[0]
-        else:
-            self.evento_data.pop('cargo_requerido', None)
+        self.evento_data['cargo_requerido'] = select.values[0] if select.values else None
         await self.atualizar_preview(interaction)
 
     @discord.ui.button(label="💰 Recompensa", style=discord.ButtonStyle.secondary, row=2)
     async def definir_recompensa(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = RecompensaModal()
-        await interaction.response.send_modal(modal)
-        await modal.wait()
-        try:
-            valor_text = modal.recompensa.value.strip()
-            if valor_text == "":
-                self.evento_data['recompensa'] = None
-            else:
-                valor = int(valor_text)
-                self.evento_data['recompensa'] = valor if valor > 0 else None
-            await self.atualizar_preview(interaction)
-        except Exception:
-            await interaction.followup.send("❌ O valor da recompensa deve ser um número.", ephemeral=True)
+        await interaction.response.send_modal(RecompensaModal(self))
 
     @discord.ui.button(label="👥 Vagas", style=discord.ButtonStyle.secondary, row=2)
     async def definir_vagas(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = VagasModal()
-        await interaction.response.send_modal(modal)
-        await modal.wait()
-        try:
-            valor_text = modal.vagas.value.strip()
-            if valor_text == "":
-                self.evento_data['vagas'] = None
-            else:
-                valor = int(valor_text)
-                self.evento_data['vagas'] = valor if valor > 0 else None
-            await self.atualizar_preview(interaction)
-        except Exception:
-            self.evento_data['vagas'] = None
-            await self.atualizar_preview(interaction)
+        await interaction.response.send_modal(VagasModal(self))
 
     @discord.ui.button(label="🚀 Publicar Evento", style=discord.ButtonStyle.success, row=3, custom_id="publicar_evento", disabled=True)
     async def publicar_evento(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        # lógica de publicação (inserção na DB e envio para canal de eventos)
         cargo_id = self.evento_data.get('cargo_requerido').id if self.evento_data.get('cargo_requerido') else None
 
         resultado = await self.bot.db_manager.execute_query(
@@ -306,16 +296,26 @@ class CriacaoEventoView(discord.ui.View):
 
         self.stop()
 
+    @discord.ui.button(label="✖️ Cancelar", style=discord.ButtonStyle.danger, row=3)
+    async def cancelar(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="Criação de evento cancelada.", embed=None, view=None)
+        self.stop()
+
 class Eventos(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @commands.command(name='agendarevento')
+    @commands.command(name='agendarevento', help='Inicia o assistente para criar um novo evento.')
     @check_permission_level(1)
-    async def agendar_evento(self, ctx: commands.Context):
+    async def agendarevento(self, ctx: commands.Context):
         view = CriacaoEventoView(self.bot, ctx.author)
         embed = discord.Embed(title="Assistente de Criação de Eventos", description="Use os botões abaixo para configurar o seu evento. Quando terminar, clique em 'Publicar'.", color=discord.Color.yellow())
-        await ctx.send(embed=embed, view=view)
+        try:
+            await ctx.author.send(embed=embed, view=view)
+            await ctx.message.add_reaction("✅")
+            await ctx.send("O assistente de criação de eventos foi enviado para a sua mensagem privada!", delete_after=10)
+        except discord.Forbidden:
+            await ctx.send("❌ Não foi possível enviar mensagem privada. Verifique suas configurações de privacidade.", delete_after=10)
 
 async def setup(bot):
     await bot.add_cog(Eventos(bot))
