@@ -36,7 +36,7 @@ class Admin(commands.Cog):
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS reacoes_anuncios (user_id BIGINT, message_id BIGINT, PRIMARY KEY (user_id, message_id))")
 
             # --- ATUALIZAÇÃO ESTRUTURAL DA TABELA DE EVENTOS ---
-            # Garante que a tabela 'eventos' existe com a nova coluna cargo_requerido_id
+            # Garante que a tabela 'eventos' existe com as novas colunas cargo_requerido_id e canal_voz_id
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS eventos (
                     id SERIAL PRIMARY KEY,
@@ -51,14 +51,16 @@ class Admin(commands.Cog):
                     message_id BIGINT,
                     status TEXT DEFAULT 'AGENDADO',
                     inscritos BIGINT[] DEFAULT '{}'::BIGINT[],
-                    cargo_requerido_id BIGINT
+                    cargo_requerido_id BIGINT,
+                    canal_voz_id BIGINT
                 )
             """)
             try:
-                # Tenta adicionar a nova coluna se a tabela já existir no formato antigo
+                # Tenta adicionar as novas colunas se a tabela já existir em formato antigo
                 await self.bot.db_manager.execute_query("ALTER TABLE eventos ADD COLUMN IF NOT EXISTS cargo_requerido_id BIGINT")
+                await self.bot.db_manager.execute_query("ALTER TABLE eventos ADD COLUMN IF NOT EXISTS canal_voz_id BIGINT")
             except Exception as e:
-                print(f"Nota de migração: Não foi possível adicionar a coluna 'cargo_requerido_id'. Pode já existir. Erro: {e}")
+                print(f"Nota de migração: Não foi possível adicionar novas colunas a 'eventos'. Podem já existir. Erro: {e}")
 
             # Valores padrão de configuração
             default_configs = {
@@ -85,7 +87,7 @@ class Admin(commands.Cog):
                 "INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", 1
             )
 
-            print("Base de dados Supabase verificada e pronta (Estrutura de Eventos v2.1 com cargos).")
+            print("Base de dados verificada e pronta (Estrutura de Eventos atualizada com cargos e canais de voz).")
         except Exception as e:
             print(f"❌ Ocorreu um erro ao inicializar a base de dados: {e}")
             raise e

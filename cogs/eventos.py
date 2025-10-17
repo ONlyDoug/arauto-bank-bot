@@ -26,30 +26,38 @@ class EventoView(discord.ui.View):
         evento = await self.bot.db_manager.execute_query(
             "SELECT * FROM eventos WHERE id = $1", self.evento_id, fetch="one"
         )
-        if not evento or evento['status'] in ['FINALIZADO', 'CANCELADO']:
+        if not evento or evento.get('status') in ['FINALIZADO', 'CANCELADO']:
             self.clear_items()
             embed = interaction.message.embeds[0]
             if evento:
                 embed.color = discord.Color.dark_grey()
-                embed.set_footer(text=f"ID do Evento: {self.evento_id} | Status: {evento['status']}")
+                embed.set_footer(text=f"ID do Evento: {self.evento_id} | Status: {evento.get('status')}")
             await interaction.message.edit(embed=embed, view=self)
             return
 
         embed = discord.Embed(
-            title=f"[{evento['tipo_evento'].upper()}] {evento['nome']}",
-            description=evento['descricao'] or "Sem detalhes adicionais.",
-            color=discord.Color.blue() if evento['status'] == 'AGENDADO' else discord.Color.green()
+            title=f"[{(evento.get('tipo_evento') or '').upper()}] {evento.get('nome')}",
+            description=evento.get('descricao') or "Sem detalhes adicionais.",
+            color=discord.Color.blue() if evento.get('status') == 'AGENDADO' else discord.Color.green()
         )
-        
-        # --- NOVA LÓGICA DE EXIBIÇÃO DE CARGO ---
+
+        # Exibe cargo requerido se existir
         if evento.get('cargo_requerido_id'):
             embed.add_field(name="🎯 Exclusivo para", value=f"<@&{evento['cargo_requerido_id']}>", inline=False)
-        
+
+        # Exibe canal de voz se existir (nova lógica)
+        if evento.get('canal_voz_id'):
+            embed.add_field(name="🔊 Canal de Voz", value=f"<#{evento['canal_voz_id']}>", inline=False)
+
         if evento.get('data_evento'):
-            embed.add_field(name="🗓️ Data e Hora", value=f"<t:{int(evento['data_evento'].timestamp())}:F>")
+            try:
+                embed.add_field(name="🗓️ Data e Hora", value=f"<t:{int(evento['data_evento'].timestamp())}:F>")
+            except Exception:
+                pass
+
         if evento.get('recompensa', 0) > 0:
             embed.add_field(name="💰 Recompensa", value=f"`{evento['recompensa']}` 🪙 por participante")
-        
+
         inscritos = evento.get('inscritos') or []
         vagas_texto = f"{len(inscritos)}"
         if evento.get('max_participantes'):
@@ -63,17 +71,18 @@ class EventoView(discord.ui.View):
             if len(mencoes) > 15:
                 lista_inscritos += f"\n... e mais {len(mencoes) - 15}."
         embed.add_field(name="Lista de Presença", value=lista_inscritos, inline=False)
-        embed.set_footer(text=f"ID do Evento: {self.evento_id} | Status: {evento['status']}")
+
+        embed.set_footer(text=f"ID do Evento: {self.evento_id} | Status: {evento.get('status')}")
         await interaction.message.edit(embed=embed, view=self)
 
     @discord.ui.button(label="Inscrever-se", style=discord.ButtonStyle.success, custom_id="inscrever_evento")
     async def inscrever(self, interaction: discord.Interaction, button: discord.ui.Button):
         user = interaction.user
-        
+
         evento = await self.bot.db_manager.execute_query(
             "SELECT cargo_requerido_id, max_participantes, inscritos FROM eventos WHERE id = $1", self.evento_id, fetch="one"
         )
-        
+
         if evento and evento.get('cargo_requerido_id'):
             try:
                 cargo_req_id = int(evento['cargo_requerido_id'])
@@ -96,7 +105,7 @@ class EventoView(discord.ui.View):
             await interaction.response.send_message("Você foi inscrito no evento!", ephemeral=True, delete_after=5)
         else:
             await interaction.followup.send("Você foi inscrito no evento!", ephemeral=True, delete_after=5)
-    
+
     @discord.ui.button(label="Remover Inscrição", style=discord.ButtonStyle.danger, custom_id="remover_inscricao_evento")
     async def remover_inscricao(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
@@ -110,6 +119,55 @@ class EventoView(discord.ui.View):
         else:
             await interaction.followup.send("Sua inscrição foi removida.", ephemeral=True, delete_after=5)
 
+    @discord.ui.button(label="Criar Canal de Voz", style=discord.ButtonStyle.secondary, custom_id="criar_canal_voz_evento", emoji="🎙️")
+    async def criar_canal_voz(self, interaction: discord.Interaction, button: discord.ui.Button):
+        evento = await self.bot.db_manager.execute_query(
+            "SELECT criador_id, nome, canal_voz_id FROM eventos WHERE id = $1", self.evento_id, fetch="one"
+        )
+
+        if not evento:
+            await interaction.response.send_message("Evento não encontrado.", ephemeral=True, delete_after=10)
+            return
+
+        # Apenas o criador pode criar o canal
+        if interaction.user.id != evento.get('criador_id'):
+            await interaction.response.send_message("Apenas o organizador do evento pode usar este botão.", ephemeral=True, delete_after=10)
+            return
+
+        # Verifica se já existe canal de voz
+        if evento.get('canal_voz_id'):
+            await interaction.response.send_message("O canal de voz para este evento já foi criado.", ephemeral=True, delete_after=10)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            guild = interaction.guild
+            canal_eventos_id = await self.bot.db_manager.get_config_value('canal_eventos', '0')
+            categoria = None
+            try:
+                if canal_eventos_id and canal_eventos_id != '0' and str(canal_eventos_id).isdigit():
+                    texto = self.bot.get_channel(int(canal_eventos_id))
+                    categoria = texto.category if texto else None
+            except Exception:
+                categoria = None
+
+            novo_canal = await guild.create_voice_channel(name=f"▶ {evento.get('nome')}", category=categoria)
+
+            await self.bot.db_manager.execute_query("UPDATE eventos SET canal_voz_id = $1 WHERE id = $2", novo_canal.id, self.evento_id)
+
+            # Desabilita o botão localmente e atualiza a mensagem
+            button.disabled = True
+            await self.atualizar_embed(interaction)
+            try:
+                await interaction.followup.send(f"Canal de voz {novo_canal.mention} criado com sucesso!", ephemeral=True)
+            except Exception:
+                pass
+
+        except discord.Forbidden:
+            await interaction.followup.send("❌ Erro de Permissão! O bot não tem a permissão 'Gerir Canais' para executar esta ação.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"Ocorreu um erro inesperado: {e}", ephemeral=True)
 
 class Eventos(commands.Cog):
     def __init__(self, bot):
