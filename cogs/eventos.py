@@ -1,11 +1,10 @@
 import discord
 from discord.ext import commands, tasks
-from discord import app_commands
 import datetime
 from typing import Optional
-from utils.permissions import app_check_permission_level, check_permission_level
+from utils.permissions import check_permission_level
 
-# --- Classes de Interface (Views, Modals, Selects) para o novo sistema guiado ---
+# --- CLASSES DE INTERFACE PARA O ASSISTENTE GUIADO ---
 
 class DetalhesEventoModal(discord.ui.Modal, title='Detalhes Essenciais do Evento'):
     nome = discord.ui.TextInput(label='Nome do Evento', placeholder='Ex: Defesa de Território em MR')
@@ -17,12 +16,12 @@ class DetalhesEventoModal(discord.ui.Modal, title='Detalhes Essenciais do Evento
         await interaction.response.defer()
 
 class RecompensaModal(discord.ui.Modal, title='Definir Recompensa'):
-    recompensa = discord.ui.TextInput(label='Recompensa por participante', placeholder='Digite 0 para remover. Ex: 100')
+    recompensa = discord.ui.TextInput(label='Recompensa por participante (apenas números)', placeholder='Digite 0 ou deixe em branco para remover.')
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
 
 class VagasModal(discord.ui.Modal, title='Definir Limite de Vagas'):
-    vagas = discord.ui.TextInput(label='Número máximo de vagas', placeholder='Deixe em branco para remover o limite.')
+    vagas = discord.ui.TextInput(label='Número máximo de vagas (apenas números)', placeholder='Deixe em branco para remover o limite.')
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
 
@@ -33,9 +32,7 @@ class EventoView(discord.ui.View):
         self.evento_id = evento_id
 
     async def atualizar_embed(self, interaction: discord.Interaction):
-        evento = await self.bot.db_manager.execute_query(
-            "SELECT * FROM eventos WHERE id = $1", self.evento_id, fetch="one"
-        )
+        evento = await self.bot.db_manager.execute_query("SELECT * FROM eventos WHERE id = $1", self.evento_id, fetch="one")
         # Caso não exista ou esteja finalizado/cancelado
         if not evento or (evento.get('status') and evento.get('status') in ['FINALIZADO', 'CANCELADO']):
             self.clear_items()
@@ -86,10 +83,7 @@ class EventoView(discord.ui.View):
     @discord.ui.button(label="Inscrever-se", style=discord.ButtonStyle.success, custom_id="inscrever_evento")
     async def inscrever(self, interaction: discord.Interaction, button: discord.ui.Button):
         user = interaction.user
-        evento = await self.bot.db_manager.execute_query(
-            "SELECT cargo_requerido_id, inscritos, max_participantes FROM eventos WHERE id = $1", self.evento_id, fetch="one"
-        )
-
+        evento = await self.bot.db_manager.execute_query("SELECT cargo_requerido_id, inscritos, max_participantes FROM eventos WHERE id = $1", self.evento_id, fetch="one")
         if not evento:
             await interaction.response.send_message("Evento não encontrado.", ephemeral=True)
             return
@@ -112,10 +106,7 @@ class EventoView(discord.ui.View):
             await interaction.response.send_message("❌ O evento já atingiu o número máximo de participantes.", ephemeral=True)
             return
 
-        await self.bot.db_manager.execute_query(
-            "UPDATE eventos SET inscritos = array_append(inscritos, $1) WHERE id = $2 AND NOT ($1 = ANY(inscritos))",
-            user.id, self.evento_id
-        )
+        await self.bot.db_manager.execute_query("UPDATE eventos SET inscritos = array_append(inscritos, $1) WHERE id = $2 AND NOT ($1 = ANY(inscritos))", user.id, self.evento_id)
         await self.atualizar_embed(interaction)
         # resposta ephemeral
         if not interaction.response.is_done():
@@ -126,10 +117,7 @@ class EventoView(discord.ui.View):
     @discord.ui.button(label="Remover Inscrição", style=discord.ButtonStyle.danger, custom_id="remover_inscricao_evento")
     async def remover_inscricao(self, interaction: discord.Interaction, button: discord.ui.Button):
         user_id = interaction.user.id
-        await self.bot.db_manager.execute_query(
-            "UPDATE eventos SET inscritos = array_remove(inscritos, $1) WHERE id = $2",
-            user_id, self.evento_id
-        )
+        await self.bot.db_manager.execute_query("UPDATE eventos SET inscritos = array_remove(inscritos, $1) WHERE id = $2", user_id, self.evento_id)
         await self.atualizar_embed(interaction)
         if not interaction.response.is_done():
             await interaction.response.send_message("Sua inscrição foi removida.", ephemeral=True, delete_after=5)
@@ -138,9 +126,7 @@ class EventoView(discord.ui.View):
 
     @discord.ui.button(label="Criar Canal de Voz", style=discord.ButtonStyle.secondary, custom_id="criar_canal_voz_evento", emoji="🎙️")
     async def criar_canal_voz(self, interaction: discord.Interaction, button: discord.ui.Button):
-        evento = await self.bot.db_manager.execute_query(
-            "SELECT criador_id, nome, canal_voz_id FROM eventos WHERE id = $1", self.evento_id, fetch="one"
-        )
+        evento = await self.bot.db_manager.execute_query("SELECT criador_id, nome, canal_voz_id FROM eventos WHERE id = $1", self.evento_id, fetch="one")
         if not evento:
             await interaction.response.send_message("Evento não encontrado.", ephemeral=True)
             return
@@ -167,7 +153,6 @@ class EventoView(discord.ui.View):
                 categoria = None
 
             novo_canal = await guild.create_voice_channel(name=f"▶ {evento.get('nome')}", category=categoria)
-
             await self.bot.db_manager.execute_query("UPDATE eventos SET canal_voz_id = $1 WHERE id = $2", novo_canal.id, self.evento_id)
 
             # Desabilita o botão localmente e atualiza a mensagem
@@ -184,28 +169,35 @@ class EventoView(discord.ui.View):
             await interaction.followup.send(f"Ocorreu um erro inesperado: {e}", ephemeral=True)
 
 class CriacaoEventoView(discord.ui.View):
-    def __init__(self, bot):
+    def __init__(self, bot, author):
         super().__init__(timeout=1800) # O painel expira após 30 minutos
         self.bot = bot
+        self.author = author
         self.evento_data = {} # Dicionário para guardar os dados do evento em criação
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author.id:
+            await interaction.response.send_message("Apenas o criador do evento pode usar estes botões.", ephemeral=True)
+            return False
+        return True
 
     async def atualizar_preview(self, interaction: discord.Interaction):
         embed = discord.Embed(title="Pré-visualização do Evento", color=discord.Color.yellow())
-        
-        if not self.evento_data.get('nome') or not self.evento_data.get('data_evento'):
-            embed.description = "Preencha os detalhes essenciais para continuar."
-            # tenta encontrar o botão de publicar (último botão por padrão)
-            if self.children:
-                self.children[-1].disabled = True
-        else:
+        publish_button = discord.utils.get(self.children, custom_id="publicar_evento")
+        if publish_button:
+            publish_button.disabled = True
+
+        if self.evento_data.get('nome') and self.evento_data.get('data_evento'):
             embed.title = f"[{self.evento_data.get('tipo_evento', 'INDEFINIDO').upper()}] {self.evento_data['nome']}"
             embed.description = self.evento_data.get('descricao', 'Sem detalhes.')
             try:
                 embed.add_field(name="🗓️ Data e Hora", value=f"<t:{int(self.evento_data['data_evento'].timestamp())}:F>")
             except Exception:
                 pass
-            if self.children:
-                self.children[-1].disabled = False
+            if publish_button:
+                publish_button.disabled = False
+        else:
+            embed.description = "Preencha os detalhes essenciais (Nome, Data e Tipo) para poder publicar."
 
         if self.evento_data.get('cargo_requerido'):
             embed.add_field(name="🎯 Exclusivo para", value=self.evento_data['cargo_requerido'].mention)
@@ -213,27 +205,25 @@ class CriacaoEventoView(discord.ui.View):
             embed.add_field(name="💰 Recompensa", value=f"`{self.evento_data['recompensa']}` 🪙")
         if self.evento_data.get('vagas') is not None:
             embed.add_field(name="👥 Vagas", value=f"{self.evento_data['vagas']}")
-            
+
         await interaction.response.edit_message(embed=embed, view=self)
 
-    @discord.ui.button(label="📝 Definir Detalhes", style=discord.ButtonStyle.primary, row=0)
+    @discord.ui.button(label="📝 Detalhes", style=discord.ButtonStyle.primary, row=0)
     async def definir_detalhes(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = DetalhesEventoModal()
         await interaction.response.send_modal(modal)
         await modal.wait()
-        
         try:
             self.evento_data['data_evento'] = datetime.datetime.strptime(modal.data_hora.value, '%Y-%m-%d %H:%M').astimezone()
             self.evento_data['nome'] = modal.nome.value
-            self.evento_data['tipo_evento'] = modal.tipo_evento.value if hasattr(modal, 'tipo_evento') else getattr(modal, 'tipo', None)
+            self.evento_data['tipo_evento'] = modal.tipo_evento.value
             self.evento_data['descricao'] = modal.descricao.value
             await self.atualizar_preview(interaction)
-        except ValueError:
-            await interaction.followup.send("❌ Formato de data inválido. Use AAAA-MM-DD HH:MM.", ephemeral=True)
+        except (ValueError, TypeError):
+            await interaction.followup.send("❌ Formato de data inválido. Use `AAAA-MM-DD HH:MM`.", ephemeral=True)
 
-    @discord.ui.select(cls=discord.ui.RoleSelect, placeholder="🎯 Restringir por Cargo (Opcional)", row=1)
+    @discord.ui.select(cls=discord.ui.RoleSelect, placeholder="🎯 Restringir por Cargo (Opcional)", row=1, max_values=1)
     async def selecionar_cargo(self, interaction: discord.Interaction, select: discord.ui.RoleSelect):
-        # RoleSelect retorna uma lista de roles selecionadas
         if select.values:
             self.evento_data['cargo_requerido'] = select.values[0]
         else:
@@ -246,30 +236,37 @@ class CriacaoEventoView(discord.ui.View):
         await interaction.response.send_modal(modal)
         await modal.wait()
         try:
-            valor = int(modal.recompensa.value)
-            self.evento_data['recompensa'] = valor if valor > 0 else None
+            valor_text = modal.recompensa.value.strip()
+            if valor_text == "":
+                self.evento_data['recompensa'] = None
+            else:
+                valor = int(valor_text)
+                self.evento_data['recompensa'] = valor if valor > 0 else None
             await self.atualizar_preview(interaction)
         except Exception:
             await interaction.followup.send("❌ O valor da recompensa deve ser um número.", ephemeral=True)
-            
+
     @discord.ui.button(label="👥 Vagas", style=discord.ButtonStyle.secondary, row=2)
     async def definir_vagas(self, interaction: discord.Interaction, button: discord.ui.Button):
         modal = VagasModal()
         await interaction.response.send_modal(modal)
         await modal.wait()
         try:
-            valor = int(modal.vagas.value)
-            self.evento_data['vagas'] = valor if valor > 0 else None
+            valor_text = modal.vagas.value.strip()
+            if valor_text == "":
+                self.evento_data['vagas'] = None
+            else:
+                valor = int(valor_text)
+                self.evento_data['vagas'] = valor if valor > 0 else None
             await self.atualizar_preview(interaction)
         except Exception:
             self.evento_data['vagas'] = None
             await self.atualizar_preview(interaction)
 
-    @discord.ui.button(label="🚀 Publicar Evento", style=discord.ButtonStyle.success, row=3, disabled=True)
+    @discord.ui.button(label="🚀 Publicar Evento", style=discord.ButtonStyle.success, row=3, custom_id="publicar_evento", disabled=True)
     async def publicar_evento(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Lógica final para inserir na DB e publicar
         cargo_id = self.evento_data.get('cargo_requerido').id if self.evento_data.get('cargo_requerido') else None
-        
+
         resultado = await self.bot.db_manager.execute_query(
             """INSERT INTO eventos (nome, descricao, tipo_evento, data_evento, recompensa, max_participantes, criador_id, cargo_requerido_id)
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id""",
@@ -282,7 +279,6 @@ class CriacaoEventoView(discord.ui.View):
         canal_eventos_id = await self.bot.db_manager.get_config_value('canal_eventos', '0')
         canal = self.bot.get_channel(int(canal_eventos_id)) if canal_eventos_id and canal_eventos_id != '0' else None
 
-        # Cria embed final diretamente (evita depender da mensagem ephemeral)
         final_embed = discord.Embed(
             title=f"[{self.evento_data.get('tipo_evento','INDEFINIDO').upper()}] {self.evento_data['nome']}",
             description=self.evento_data.get('descricao', 'Sem detalhes.'),
@@ -307,21 +303,19 @@ class CriacaoEventoView(discord.ui.View):
             await interaction.edit_original_response(content=f"✅ Evento publicado com sucesso em {canal.mention}!", embed=None, view=None)
         else:
             await interaction.edit_original_response(content="❌ O canal de eventos não está configurado. Evento salvo, mas não publicado.", embed=None, view=None)
-        
+
         self.stop()
 
 class Eventos(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
-    @app_commands.command(name='agendarevento', description='Inicia o assistente para criar um novo evento.')
-    @app_check_permission_level(1)
-    async def agendar_evento(self, interaction: discord.Interaction):
-        view = CriacaoEventoView(self.bot)
+    @commands.command(name='agendarevento')
+    @check_permission_level(1)
+    async def agendar_evento(self, ctx: commands.Context):
+        view = CriacaoEventoView(self.bot, ctx.author)
         embed = discord.Embed(title="Assistente de Criação de Eventos", description="Use os botões abaixo para configurar o seu evento. Quando terminar, clique em 'Publicar'.", color=discord.Color.yellow())
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-    # (Os outros comandos como !eventos, !finalizarevento, etc. permanecem aqui inalterados)
+        await ctx.send(embed=embed, view=view)
 
 async def setup(bot):
     await bot.add_cog(Eventos(bot))
