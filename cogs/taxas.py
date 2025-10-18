@@ -10,10 +10,12 @@ class Taxas(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.ciclo_semanal_taxas.start()
-        print("Módulo de Taxas v2.1 (com !forcar-taxa seguro) pronto.")
+        self.atualizar_relatorio_automatico.start() # <-- INICIA A NOVA TAREFA
+        print("Módulo de Taxas v2.2 (com Relatório Automático) pronto.")
 
     def cog_unload(self):
         self.ciclo_semanal_taxas.cancel()
+        self.atualizar_relatorio_automatico.cancel() # <-- PARA A NOVA TAREFA
 
     @commands.Cog.listener()
     async def on_member_update(self, before: discord.Member, after: discord.Member):
@@ -53,6 +55,82 @@ class Taxas(commands.Cog):
         if hoje == dia_reset:
             print(f"Hoje é o dia de reset das taxas ({dia_reset}). A iniciar o ciclo completo.")
             await self.executar_ciclo_de_taxas(resetar_ciclo=True)
+
+    # --- NOVA TAREFA PARA O RELATÓRIO AUTOMÁTICO ---
+    @tasks.loop(minutes=15)
+    async def atualizar_relatorio_automatico(self):
+        try:
+            configs = await self.bot.db_manager.get_all_configs(['canal_relatorio_taxas', 'taxa_relatorio_msg_id'])
+            canal_id = int(configs.get('canal_relatorio_taxas', '0') or '0')
+            msg_id = int(configs.get('taxa_relatorio_msg_id', '0') or '0')
+
+            if canal_id == 0:
+                return  # Canal não configurado
+
+            canal = self.bot.get_channel(canal_id)
+            if not canal:
+                return
+
+            embed = await self._construir_embed_relatorio(canal.guild)
+
+            try:
+                if msg_id != 0:
+                    msg = await canal.fetch_message(msg_id)
+                    await msg.edit(embed=embed)
+                else:
+                    raise discord.NotFound
+            except (discord.NotFound, discord.Forbidden):
+                # Se a mensagem foi apagada ou não existe/permissão, cria uma nova e guarda o ID
+                try:
+                    nova_msg = await canal.send(embed=embed)
+                    await self.bot.db_manager.set_config_value('taxa_relatorio_msg_id', str(nova_msg.id))
+                    print(f"Nova mensagem de relatório de taxas criada no canal {canal.name}.")
+                except Exception as e:
+                    print(f"Falha ao criar a mensagem de relatório de taxas: {e}")
+        except Exception as e:
+            print(f"Erro ao atualizar relatório automático de taxas: {e}")
+
+    @atualizar_relatorio_automatico.before_loop
+    async def before_atualizar_relatorio(self):
+        await self.bot.wait_until_ready()
+        print("Tarefa de relatório automático de taxas pronta.")
+
+    # --- FUNÇÃO AUXILIAR PARA CONSTRUIR O EMBED (EVITA CÓDIGO DUPLICADO) ---
+    async def _construir_embed_relatorio(self, guild: discord.Guild):
+        registros = await self.bot.db_manager.execute_query(
+            "SELECT user_id, status_ciclo FROM taxas ORDER BY status_ciclo", fetch="all"
+        )
+
+        embed = discord.Embed(title="📈 Relatório de Status das Taxas", color=discord.Color.from_rgb(100, 150, 200))
+        embed.set_footer(text=f"Atualizado em: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+
+        status_map = defaultdict(list)
+        for r in registros:
+            if membro := guild.get_member(r['user_id']):
+                status_map[r.get('status_ciclo', 'PENDENTE')].append(membro.mention)
+
+        def formatar_lista(lista):
+            if not lista:
+                return "Nenhum"
+            texto = "\n".join(lista)
+            if len(texto) > 1024:
+                return texto[:1020] + "\n..."
+            return texto
+
+        embed.add_field(name=f"🔴 Pendentes ({len(status_map['PENDENTE'])})", value=formatar_lista(status_map['PENDENTE']), inline=False)
+        pagos_total = status_map.get('PAGO_ANTECIPADO', []) + status_map.get('PAGO_ATRASADO', [])
+        embed.add_field(name=f"🟢 Pagos ({len(pagos_total)})", value=formatar_lista(pagos_total), inline=False)
+        embed.add_field(name=f"🐣 Isentos (Novos Membros) ({len(status_map.get('ISENTO_NOVO_MEMBRO', []))})", value=formatar_lista(status_map.get('ISENTO_NOVO_MEMBRO', [])), inline=False)
+
+        return embed
+
+    # --- COMANDO MANUAL ATUALIZADO PARA USAR A FUNÇÃO AUXILIAR ---
+    @commands.command(name="relatorio-taxas", hidden=True)
+    @check_permission_level(2)
+    async def relatorio_taxas(self, ctx):
+        await ctx.send("A gerar um relatório instantâneo de taxas...")
+        embed = await self._construir_embed_relatorio(ctx.guild)
+        await ctx.send(embed=embed)
 
     async def executar_ciclo_de_taxas(self, ctx=None, resetar_ciclo: bool = False):
         """Aplica penalidades aos pendentes. Se resetar_ciclo=True, também reseta status de quem pagou/foi isento."""

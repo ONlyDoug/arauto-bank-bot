@@ -55,13 +55,19 @@ class Admin(commands.Cog):
             except Exception as e:
                 print(f"Nota de migração: Não foi possível adicionar colunas a 'eventos'. Erro: {e}")
 
+            # --- NOVAS CHAVES DE CONFIGURAÇÃO ---
             default_configs = {
                 'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
-                'taxa_semanal_valor': '500', 'taxa_dia_semana': '6', 'taxa_dia_abertura': '5', 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
+                'taxa_semanal_valor': '500', 'taxa_dia_semana': '6', 'taxa_dia_abertura': '5',
+                'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
                 'perm_nivel_1': '0', 'perm_nivel_2': '0', 'perm_nivel_3': '0', 'perm_nivel_4': '0',
                 'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
                 'canal_resgates': '0', 'canal_batepapo': '0', 'canal_log_taxas': '0',
                 'canal_eventos': '0', 'canal_planejamento': '0',
+                'canal_relatorio_taxas': '0',  # novo
+                'canal_pagamento_taxas': '0',  # novo
+                'canal_info_taxas': '0',       # novo
+                'taxa_relatorio_msg_id': '0',  # novo (mensagem persistente)
                 'recompensa_voz': '1', 'limite_voz': '120', 'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60', 'recompensa_reacao': '50',
                 'recompensa_puxar_bronze': '100', 'recompensa_puxar_ouro': '250', 'limite_puxadas_diario': '5'
             }
@@ -69,7 +75,7 @@ class Admin(commands.Cog):
                 await self.bot.db_manager.execute_query("INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING", chave, valor)
             await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", 1)
 
-            print("Base de dados verificada e pronta (Estrutura de Taxas v2.0).")
+            print("Base de dados verificada e pronta (Estrutura de Taxas v2.2 com canais mapeados).")
         except Exception as e:
             print(f"❌ Ocorreu um erro ao inicializar a base de dados: {e}")
             raise e
@@ -141,8 +147,11 @@ class Admin(commands.Cog):
             guild.me: discord.PermissionOverwrite(view_channel=True)
         }
         for role_id in perm_roles_ids:
-            if role := guild.get_role(int(role_id)):
-                admin_overwrites[role] = discord.PermissionOverwrite(view_channel=True)
+            try:
+                if role := guild.get_role(int(role_id)):
+                    admin_overwrites[role] = discord.PermissionOverwrite(view_channel=True)
+            except Exception:
+                continue
 
         # 1. Categoria Principal
         cat_bank = await guild.create_category("🏦 ARAUTO BANK")
@@ -152,7 +161,7 @@ class Admin(commands.Cog):
         embed.add_field(name="Comece por aqui", value="Cada canal tem uma mensagem fixada que explica o seu propósito. Leia-as para entender como tudo funciona.", inline=False)
         embed.add_field(name="Comandos Essenciais", value="`!saldo` - Vê o seu saldo de moedas.\n`!extrato` - Vê o seu histórico de transações.\n`!loja` - Mostra os itens que pode comprar.\n`!info-moeda` - Vê a saúde da nossa economia.", inline=False)
         await self.create_and_pin(ctx, category=cat_bank, name="🎓｜como-usar-o-bot", embed=embed, overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
-
+        
         embed = discord.Embed(title="📈｜Mercado Financeiro", description="A nossa moeda tem valor real! O seu valor é **lastreado** (garantido) pela prata guardada no tesouro da guilda.", color=0x1abc9c)
         embed.add_field(name="O que é o Lastro?", value="Significa que para cada moeda em circulação, existe uma quantidade correspondente de prata guardada. Isto garante que a nossa moeda nunca perde o seu valor.", inline=False)
         embed.add_field(name="Comando Útil", value="Use `!info-moeda` para ver o total de prata no tesouro, a taxa de conversão atual e quantas moedas existem no total.", inline=False)
@@ -179,10 +188,10 @@ class Admin(commands.Cog):
         await asyncio.sleep(1.5)
 
         embed = discord.Embed(title="ℹ️｜Como Funciona a Taxa", description="A taxa semanal é um sistema automático que ajuda a financiar os projetos e as atividades da guilda.", color=0x7f8c8d)
-        await self.create_and_pin(ctx, category=cat_taxas, name="ℹ️｜como-funciona-a-taxa", embed=embed, overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)})
+        await self.create_and_pin(ctx, category=cat_taxas, name="ℹ️｜como-funciona-a-taxa", embed=embed, overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)}, set_config_key='canal_info_taxas')
         
         embed = discord.Embed(title="🪙｜Pagamento de Taxas", description="Use este canal para regularizar a sua situação se estiver com a taxa em atraso.", color=0x95a5a6)
-        await self.create_and_pin(ctx, category=cat_taxas, name="🪙｜pagamento-de-taxas", embed=embed)
+        await self.create_and_pin(ctx, category=cat_taxas, name="🪙｜pagamento-de-taxas", embed=embed, set_config_key='canal_pagamento_taxas')
 
         # 3. Categoria de Administração
         cat_admin = await guild.create_category("⚙️ ADMINISTRAÇÃO", overwrites=admin_overwrites)
@@ -190,6 +199,9 @@ class Admin(commands.Cog):
         
         embed = discord.Embed(title="📋｜Planeamento de Eventos", description="Este canal é para uso exclusivo da staff para a criação de eventos.", color=0x546e7a)
         await self.create_and_pin(ctx, category=cat_admin, name="📋｜planeamento", embed=embed, set_config_key='canal_planejamento')
+        
+        embed = discord.Embed(title="📈｜Relatório de Taxas", description="Este canal mostra o status de pagamento de taxas de todos os membros, atualizado automaticamente.")
+        await self.create_and_pin(ctx, category=cat_admin, name="📈｜relatorio-de-taxas", embed=embed, overwrites={guild.default_role: discord.PermissionOverwrite(send_messages=False)}, set_config_key='canal_relatorio_taxas')
         
         embed = discord.Embed(title="✅｜Aprovações", description="Este canal é para uso exclusivo da staff. Aqui aparecerão todas as submissões de orbes e pagamentos de taxa.", color=0xf1c40f)
         await self.create_and_pin(ctx, category=cat_admin, name="✅｜aprovações", embed=embed, set_config_key='canal_aprovacao')
@@ -237,10 +249,9 @@ class Admin(commands.Cog):
     @commands.group(name="definircanal", invoke_without_command=True)
     @check_permission_level(4)
     async def definir_canal(self, ctx):
-        tipos = "`planejamento`, `eventos`, `anuncios`, `batepapo`, `aprovacao`, `logtaxas`, `resgates`"
+        tipos = "`planejamento`, `eventos`, `anuncios`, `batepapo`, `aprovacao`, `logtaxas`, `resgates`, `relatoriotaxas`, `pagamentotaxas`, `infotaxas`"
         await ctx.send(f"Use `!definircanal <tipo> #canal`. Tipos disponíveis: {tipos}.")
     
-    # --- GRUPO DE COMANDOS 'definircanal' ATUALIZADO ---
     @definir_canal.command(name="planejamento")
     async def definir_canal_planejamento(self, ctx, canal: discord.TextChannel):
         await self.bot.db_manager.set_config_value("canal_planejamento", str(canal.id))
@@ -276,7 +287,20 @@ class Admin(commands.Cog):
         await self.bot.db_manager.set_config_value("canal_resgates", str(canal.id))
         await ctx.send(f"✅ O canal de resgates para a staff foi definido como {canal.mention}.")
 
-    # --- FIM DO GRUPO DE COMANDOS 'definircanal' ---
+    @definir_canal.command(name="relatoriotaxas")
+    async def definir_canal_relatorio_taxas(self, ctx, canal: discord.TextChannel):
+        await self.bot.db_manager.set_config_value("canal_relatorio_taxas", str(canal.id))
+        await ctx.send(f"✅ O canal para o relatório automático de taxas foi definido como {canal.mention}.")
+
+    @definir_canal.command(name="pagamentotaxas")
+    async def definir_canal_pagamento_taxas(self, ctx, canal: discord.TextChannel):
+        await self.bot.db_manager.set_config_value("canal_pagamento_taxas", str(canal.id))
+        await ctx.send(f"✅ O canal para pagamento de taxas foi definido como {canal.mention}.")
+
+    @definir_canal.command(name="infotaxas")
+    async def definir_canal_info_taxas(self, ctx, canal: discord.TextChannel):
+        await self.bot.db_manager.set_config_value("canal_info_taxas", str(canal.id))
+        await ctx.send(f"✅ O canal de informações sobre taxas foi definido como {canal.mention}.")
 
     @commands.command(name="anunciar")
     @check_permission_level(3)
@@ -354,9 +378,17 @@ class Admin(commands.Cog):
             texto = ""
             for chave in sorted(chaves):
                 valor = configs.get(chave, "Não definido")
-                if 'canal' in chave and valor.isdigit() and valor != '0': valor = (c := self.bot.get_channel(int(valor))) and c.mention or f"⚠️ ID `{valor}`"
-                elif 'cargo' in chave and valor.isdigit() and valor != '0': valor = (r := ctx.guild.get_role(int(valor))) and r.mention or f"⚠️ ID `{valor}`"
-                elif 'perm_nivel' in chave and valor and valor != '0': valor = ", ".join([(r := ctx.guild.get_role(int(rid))) and r.mention or f"⚠️ ID `{rid}`" for rid in valor.split(',')])
+                try:
+                    if 'canal' in chave and valor.isdigit() and valor != '0':
+                        c = self.bot.get_channel(int(valor))
+                        valor = c.mention if c else f"⚠️ ID `{valor}`"
+                    elif 'cargo' in chave and valor.isdigit() and valor != '0':
+                        r = ctx.guild.get_role(int(valor))
+                        valor = r.mention if r else f"⚠️ ID `{valor}`"
+                    elif 'perm_nivel' in chave and valor and valor != '0':
+                        valor = ", ".join([(r := ctx.guild.get_role(int(rid))) and r.mention or f"⚠️ ID `{rid}`" for rid in valor.split(',')])
+                except Exception:
+                    pass
                 texto += f"**{chave}:** {valor}\n"
             if texto: embed.add_field(name=f"--- {nome_cat} ---", value=texto, inline=False)
         await ctx.send(embed=embed)
@@ -414,7 +446,7 @@ class Admin(commands.Cog):
             await ctx.send("✅ Teste concluído.")
         except Exception as e: await ctx.send(f"❌ Falha no teste: {e}")
 
-    @commands.command(name='sync', hidden=True)
+    @commands.command(name="sync", hidden=True)
     @commands.is_owner()
     async def sync(self, ctx):
         await ctx.send("🔄 Sincronizando comandos de barra...")
