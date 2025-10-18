@@ -19,9 +19,11 @@ class Taxas(commands.Cog):
     async def on_member_update(self, before: discord.Member, after: discord.Member):
         configs = await self.bot.db_manager.get_all_configs(['cargo_membro'])
         cargo_membro_id = int(configs.get('cargo_membro', '0'))
-        if cargo_membro_id == 0: return
+        if cargo_membro_id == 0:
+            return
         cargo_membro = after.guild.get_role(cargo_membro_id)
-        if not cargo_membro: return
+        if not cargo_membro:
+            return
         if cargo_membro not in before.roles and cargo_membro in after.roles:
             await self.bot.db_manager.execute_query(
                 """INSERT INTO taxas (user_id, status_ciclo, data_entrada) VALUES ($1, 'ISENTO_NOVO_MEMBRO', $2)
@@ -33,7 +35,8 @@ class Taxas(commands.Cog):
     async def regularizar_membro(self, membro: discord.Member, configs: dict):
         cargo_inadimplente = membro.guild.get_role(int(configs.get('cargo_inadimplente', '0')))
         cargo_membro = membro.guild.get_role(int(configs.get('cargo_membro', '0')))
-        if not cargo_inadimplente or not cargo_membro: return
+        if not cargo_inadimplente or not cargo_membro:
+            return
         try:
             if cargo_inadimplente in membro.roles:
                 await membro.remove_roles(cargo_inadimplente, reason="Taxa regularizada")
@@ -49,22 +52,22 @@ class Taxas(commands.Cog):
         hoje = datetime.now().weekday()
         if hoje == dia_reset:
             print(f"Hoje é o dia de reset das taxas ({dia_reset}). A iniciar o ciclo completo.")
-            # O ciclo automático executa o processo completo, incluindo o reset.
             await self.executar_ciclo_de_taxas(resetar_ciclo=True)
 
-    # --- FUNÇÃO MODIFICADA ---
     async def executar_ciclo_de_taxas(self, ctx=None, resetar_ciclo: bool = False):
-        """Lógica que aplica inadimplência e, opcionalmente, reseta o ciclo."""
-        guild = ctx.guild if ctx else self.bot.guilds[0] if self.bot.guilds else None
-        if not guild: return print("ERRO: Bot não está em nenhum servidor.")
+        """Aplica penalidades aos pendentes. Se resetar_ciclo=True, também reseta status de quem pagou/foi isento."""
+        guild = ctx.guild if ctx else (self.bot.guilds[0] if self.bot.guilds else None)
+        if not guild:
+            return print("ERRO: Bot não está em nenhum servidor.")
 
         configs = await self.bot.db_manager.get_all_configs([
             'cargo_membro', 'cargo_inadimplente', 'cargo_isento', 'canal_log_taxas'
         ])
         canal_log = None
         try:
-            canal_log_id = int(configs.get('canal_log_taxas', '0'))
-            canal_log = self.bot.get_channel(canal_log_id) if canal_log_id else None
+            canal_log_id = int(configs.get('canal_log_taxas', '0') or '0')
+            if canal_log_id:
+                canal_log = self.bot.get_channel(canal_log_id)
         except Exception:
             canal_log = None
 
@@ -77,15 +80,19 @@ class Taxas(commands.Cog):
 
         for registro in membros_pendentes_db:
             membro = guild.get_member(registro['user_id'])
-            if not membro: continue
+            if not membro:
+                continue
 
             cargo_isento = guild.get_role(int(configs.get('cargo_isento', '0')))
             if cargo_isento and cargo_isento in membro.roles:
                 continue
 
-            if registro.get('data_entrada') and registro['data_entrada'] > uma_semana_atras:
+            data_entrada = registro.get('data_entrada')
+            if data_entrada and data_entrada > uma_semana_atras:
                 novos_isentos.append(membro)
-                await self.bot.db_manager.execute_query("UPDATE taxas SET status_ciclo = 'ISENTO_NOVO_MEMBRO' WHERE user_id = $1", membro.id)
+                await self.bot.db_manager.execute_query(
+                    "UPDATE taxas SET status_ciclo = 'ISENTO_NOVO_MEMBRO' WHERE user_id = $1", membro.id
+                )
                 continue
 
             try:
@@ -116,11 +123,15 @@ class Taxas(commands.Cog):
 
         log_msg = "Ciclo de taxas executado."
         if ctx:
-            try: await ctx.send(log_msg, embed=embed)
-            except Exception: pass
+            try:
+                await ctx.send(log_msg, embed=embed)
+            except Exception:
+                pass
         if canal_log:
-            try: await canal_log.send(embed=embed)
-            except Exception: pass
+            try:
+                await canal_log.send(embed=embed)
+            except Exception:
+                pass
         print(log_msg)
 
     @ciclo_semanal_taxas.before_loop
@@ -130,8 +141,9 @@ class Taxas(commands.Cog):
     @commands.command(name="pagar-taxa", help='Paga a sua taxa semanal.')
     async def pagar_taxa(self, ctx):
         configs = await self.bot.db_manager.get_all_configs(['taxa_semanal_valor', 'taxa_dia_semana', 'taxa_dia_abertura', 'cargo_membro', 'cargo_inadimplente'])
-        valor_taxa = int(configs.get('taxa_semanal_valor', 0))
-        if valor_taxa == 0: return await ctx.send("O sistema de taxas não está configurado.")
+        valor_taxa = int(configs.get('taxa_semanal_valor', 0) or 0)
+        if valor_taxa == 0:
+            return await ctx.send("O sistema de taxas não está configurado.")
 
         status_atual_db = await self.bot.db_manager.execute_query("SELECT status_ciclo FROM taxas WHERE user_id = $1", ctx.author.id, fetch="one")
         status_atual = status_atual_db['status_ciclo'] if status_atual_db else 'PENDENTE'
@@ -162,17 +174,16 @@ class Taxas(commands.Cog):
                 "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET status_ciclo = $2",
                 ctx.author.id, status_pagamento
             )
-            if pagamento_atrasado: await self.regularizar_membro(ctx.author, configs)
+            if pagamento_atrasado:
+                await self.regularizar_membro(ctx.author, configs)
             await ctx.send(f"✅ Taxa paga com sucesso! O seu status para este ciclo é: **{status_pagamento}**.")
         except ValueError:
             await ctx.send(f"❌ Você não tem saldo suficiente. A taxa custa **{valor_taxa}** moedas.")
 
-    # --- COMANDO MODIFICADO ---
     @commands.command(name="forcar-taxa", hidden=True)
     @check_permission_level(4)
     async def forcar_taxa(self, ctx):
         await ctx.send("🔥 A forçar a execução do ciclo de penalidades de taxas (sem resetar quem já pagou)...")
-        # Força a execução apenas da parte de penalização, sem resetar o ciclo.
         await self.executar_ciclo_de_taxas(ctx, resetar_ciclo=False)
 
     @commands.command(name="relatorio-taxas", hidden=True)
@@ -185,7 +196,7 @@ class Taxas(commands.Cog):
         for r in registros:
             membro = ctx.guild.get_member(r['user_id'])
             if membro:
-                status_map[r['status_ciclo']].append(membro.mention)
+                status_map[r.get('status_ciclo', 'UNKNOWN')].append(membro.mention)
 
         for status, mentions in status_map.items():
             value = "\n".join(mentions)
@@ -203,7 +214,6 @@ class Taxas(commands.Cog):
         await self.bot.db_manager.set_config_value('taxa_dia_abertura', str(dia_da_semana))
         await ctx.send(f"✅ Janela de pagamento de taxas abrirá toda **{dias[dia_da_semana]}**.")
 
-    # Manter os outros comandos de admin de taxas
     @commands.command(name="paguei-prata", help='Inicia o processo de pagamento da taxa com prata do jogo.')
     async def paguei_prata(self, ctx):
         if not ctx.message.attachments or not ctx.message.attachments[0].content_type.startswith('image/'):
@@ -222,8 +232,7 @@ class Taxas(commands.Cog):
 
         embed = discord.Embed(
             title="🧾 Pagamento de Taxa em Prata",
-            description=f"**Membro:** {ctx.author.mention} (`{ctx.author.id}`)\n"
-                        f"Enviou um comprovativo de pagamento da taxa em prata.",
+            description=f"**Membro:** {ctx.author.mention} (`{ctx.author.id}`)\nEnviou um comprovativo de pagamento da taxa em prata.",
             color=discord.Color.orange()
         )
         embed.set_image(url=imagem.url)
@@ -233,19 +242,10 @@ class Taxas(commands.Cog):
 
         try:
             msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
-
-            await self.bot.db_manager.execute_query(
-                "DELETE FROM submissoes_taxa WHERE message_id = $1",
-                msg_aprovacao.id
-            )
-            await self.bot.db_manager.execute_query(
-                "INSERT INTO submissoes_taxa (message_id, user_id, status) VALUES ($1, $2, $3)",
-                msg_aprovacao.id, ctx.author.id, 'pendente'
-            )
-
+            await self.bot.db_manager.execute_query("DELETE FROM submissoes_taxa WHERE message_id = $1", msg_aprovacao.id)
+            await self.bot.db_manager.execute_query("INSERT INTO submissoes_taxa (message_id, user_id, status) VALUES ($1, $2, $3)", msg_aprovacao.id, ctx.author.id, 'pendente')
             await ctx.message.add_reaction("✅")
             await ctx.send("✅ Comprovativo enviado para análise! Agora aguente a ansiedade até um staff aprovar.", delete_after=15)
-
         except Exception as e:
             await ctx.send("❌ Ocorreu um erro ao enviar o seu comprovativo.")
             print(f"Erro no comando paguei-prata: {e}")
@@ -253,14 +253,16 @@ class Taxas(commands.Cog):
     @commands.command(name="definir-taxa", hidden=True)
     @check_permission_level(4)
     async def definir_taxa(self, ctx, valor: int):
-        if valor < 0: return await ctx.send("O valor não pode ser negativo.")
+        if valor < 0:
+            return await ctx.send("O valor não pode ser negativo.")
         await self.bot.db_manager.set_config_value('taxa_semanal_valor', str(valor))
         await ctx.send(f"✅ Valor da taxa semanal definido para **{valor}** moedas.")
 
     @commands.command(name="definir-taxa-dia", hidden=True)
     @check_permission_level(4)
     async def definir_taxa_dia(self, ctx, dia_da_semana: int):
-        if not 0 <= dia_da_semana <= 6: return await ctx.send("❌ Dia inválido (0=Segunda, 6=Domingo).")
+        if not 0 <= dia_da_semana <= 6:
+            return await ctx.send("❌ Dia inválido (0=Segunda, 6=Domingo).")
         dias = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
         await self.bot.db_manager.set_config_value('taxa_dia_semana', str(dia_da_semana))
         await ctx.send(f"✅ O ciclo de reset das taxas foi agendado para **{dias[dia_da_semana]}**.")
