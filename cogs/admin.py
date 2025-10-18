@@ -58,7 +58,7 @@ class Admin(commands.Cog):
                 'perm_nivel_1': '0', 'perm_nivel_2': '0', 'perm_nivel_3': '0', 'perm_nivel_4': '0',
                 'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
                 'canal_resgates': '0', 'canal_batepapo': '0', 'canal_log_taxas': '0',
-                'canal_eventos': '0',
+                'canal_eventos': '0', 'canal_planejamento': '0',
                 'recompensa_voz': '1', 'limite_voz': '120',
                 'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60',
                 'recompensa_reacao': '50',
@@ -373,7 +373,7 @@ class Admin(commands.Cog):
         categorias = {
             "Canais do Sistema": [
                 'canal_anuncios', 'canal_aprovacao', 'canal_batepapo', 'canal_eventos',
-                'canal_log_taxas', 'canal_mercado', 'canal_orbes', 'canal_resgates'
+                'canal_log_taxas', 'canal_mercado', 'canal_orbes', 'canal_resgates', 'canal_planejamento'
             ],
             "Cargos Funcionais": ['cargo_membro', 'cargo_inadimplente', 'cargo_isento'],
             "Hierarquia de Permissões": ['perm_nivel_1', 'perm_nivel_2', 'perm_nivel_3', 'perm_nivel_4'],
