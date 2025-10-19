@@ -238,6 +238,67 @@ class Taxas(commands.Cog):
         await ctx.send("🔥 A forçar a execução do ciclo de penalidades (sem resetar quem já pagou)...")
         await self.executar_ciclo_de_taxas(ctx, resetar_ciclo=False)
 
+    # --- NOVO COMANDO DE EMERGÊNCIA E SINCRONIZAÇÃO ---
+    @commands.command(name="sincronizar-pagamentos", hidden=True)
+    @check_permission_level(4)
+    async def sincronizar_pagamentos(self, ctx):
+        await ctx.send("⚙️ **Iniciando Sincronização Total de Pagamentos!**\nA analisar pagamentos em moedas e em prata desde o último reset...")
+
+        configs = await self.bot.db_manager.get_all_configs(['taxa_dia_semana', 'taxa_semanal_valor', 'cargo_inadimplente', 'cargo_membro'])
+        dia_reset = int(configs.get('taxa_dia_semana', '6') or 6)
+        valor_taxa = int(configs.get('taxa_semanal_valor', 0) or 0)
+
+        hoje = datetime.now(timezone.utc)
+        dias_desde_reset = (hoje.weekday() - dia_reset + 7) % 7
+        ultimo_reset = (hoje - timedelta(days=dias_desde_reset)).replace(hour=12, minute=0, second=0, microsecond=0)
+
+        # 1) pagamentos em moedas (transacoes)
+        pagamentos_moedas = await self.bot.db_manager.execute_query(
+            "SELECT DISTINCT user_id FROM transacoes WHERE descricao LIKE 'Pagamento de taxa semanal%' AND data >= $1 AND valor = $2",
+            ultimo_reset, valor_taxa, fetch="all"
+        )
+        pagadores_moedas_ids = {p['user_id'] for p in pagamentos_moedas} if pagamentos_moedas else set()
+
+        # 2) submissões de prata já aprovadas
+        pagamentos_prata = await self.bot.db_manager.execute_query(
+            "SELECT user_id FROM submissoes_taxa WHERE status = 'aprovado'", fetch="all"
+        )
+        pagadores_prata_ids = {p['user_id'] for p in pagamentos_prata} if pagamentos_prata else set()
+
+        # 3) união das fontes
+        todos_pagadores_ids = pagadores_moedas_ids.union(pagadores_prata_ids)
+
+        if not todos_pagadores_ids:
+            return await ctx.send("Nenhum pagamento (moedas ou prata) encontrado para sincronizar.")
+
+        corrigidos, ja_regulares = [], []
+
+        for user_id in todos_pagadores_ids:
+            membro = ctx.guild.get_member(user_id)
+            if not membro:
+                continue
+
+            # atualiza o status na tabela de taxas
+            await self.bot.db_manager.execute_query(
+                "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, 'PAGO_ATRASADO') ON CONFLICT (user_id) DO UPDATE SET status_ciclo = 'PAGO_ATRASADO'",
+                user_id
+            )
+
+            cargo_inadimplente = ctx.guild.get_role(int(configs.get('cargo_inadimplente', '0') or 0))
+            if cargo_inadimplente and cargo_inadimplente in membro.roles:
+                await self.regularizar_membro(membro, configs)
+                corrigidos.append(membro.mention)
+            else:
+                ja_regulares.append(membro.mention)
+
+        embed = discord.Embed(
+            title="✅ Sincronização de Pagamentos Concluída",
+            description=f"Analisado o período desde {ultimo_reset.strftime('%d/%m %H:%M')} UTC."
+        )
+        embed.add_field(name=f"Acesso Restaurado ({len(corrigidos)})", value="\n".join(corrigidos) or "Nenhum", inline=False)
+        embed.add_field(name=f"Pagamentos Contabilizados ({len(ja_regulares)})", value="\n".join(ja_regulares) or "Nenhum", inline=False)
+        await ctx.send(embed=embed)
+
     @commands.command(name="corrigir-taxas", hidden=True)
     @check_permission_level(4)
     async def corrigir_taxas(self, ctx):

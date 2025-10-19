@@ -85,6 +85,7 @@ class OrbeAprovacaoView(discord.ui.View):
         await self.handle_interaction(interaction, "recusado")
 
 
+# --- ATUALIZAÇÃO CRÍTICA NA TaxaPrataView ---
 class TaxaPrataView(discord.ui.View):
     def __init__(self, bot: commands.Bot):
         super().__init__(timeout=None)
@@ -93,17 +94,16 @@ class TaxaPrataView(discord.ui.View):
     async def handle_interaction(self, interaction: discord.Interaction, novo_status: str):
         if not await check_permission_level(2).predicate(interaction):
             return
-
         await interaction.response.defer()
         db_manager = self.bot.db_manager
         
         try:
             submissao = await db_manager.execute_query(
                 "SELECT user_id FROM submissoes_taxa WHERE message_id = $1 AND status = 'pendente'",
-                interaction.message.id,
-                fetch="one"
+                interaction.message.id, fetch="one"
             )
             if not submissao:
+                # submissão já tratada
                 embed = interaction.message.embeds[0]
                 embed.description += "\n\n**Esta submissão já foi tratada.**"
                 for item in self.children: item.disabled = True
@@ -116,14 +116,23 @@ class TaxaPrataView(discord.ui.View):
             if novo_status == "aprovado" and membro:
                 taxas_cog = self.bot.get_cog('Taxas')
                 configs = await db_manager.get_all_configs(['cargo_membro', 'cargo_inadimplente'])
+                
+                # CORREÇÃO: Atualiza o status no novo sistema de taxas
+                await db_manager.execute_query(
+                    "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, 'PAGO_ATRASADO') ON CONFLICT (user_id) DO UPDATE SET status_ciclo = 'PAGO_ATRASADO'",
+                    user_id
+                )
+                
+                # Regulariza os cargos do membro
                 await taxas_cog.regularizar_membro(membro, configs)
-                await db_manager.execute_query("UPDATE taxas SET status = 'pago_prata' WHERE user_id = $1", user_id)
 
+            # Marca a submissão como processada
             await db_manager.execute_query(
                 "UPDATE submissoes_taxa SET status = $1 WHERE message_id = $2",
                 novo_status, interaction.message.id
             )
 
+            # Edita o embed e desativa botões
             embed = interaction.message.embeds[0]
             if novo_status == "aprovado":
                 embed.color = discord.Color.green()
@@ -137,18 +146,17 @@ class TaxaPrataView(discord.ui.View):
             for item in self.children:
                 item.disabled = True
             await interaction.message.edit(embed=embed, view=self)
-
-            # --- ATUALIZAÇÃO IMPORTANTE ---
+            
             # Enviar DM para o membro
             if membro:
                 try:
                     if novo_status == "aprovado":
                         await membro.send("✅ O seu pagamento de taxa em prata foi **APROVADO**! O seu acesso aos canais da guilda foi restaurado. Bom jogo!")
-                    else: # Recusado
+                    else:
                         await membro.send("❌ O seu comprovativo de pagamento de taxa em prata foi **RECUSADO**. Por favor, contacte um staff para perceber o motivo.")
                 except discord.Forbidden:
                     print(f"Não foi possível enviar DM para o utilizador {user_id}. Provavelmente tem as DMs desativadas.")
-
+            
         except Exception as e:
             print(f"Erro ao processar aprovação de taxa prata: {e}")
             await interaction.followup.send("Ocorreu um erro ao processar a sua ação.", ephemeral=True)
