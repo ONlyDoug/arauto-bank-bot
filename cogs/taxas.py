@@ -12,7 +12,7 @@ class Taxas(commands.Cog):
         self.bot = bot
         self.ciclo_semanal_taxas.start()
         self.atualizar_relatorio_automatico.start()
-        print("Módulo de Taxas v2.4 (Correção e Relatório Multi-Mensagem) pronto.")
+        print("Módulo de Taxas v2.5 (Sincronização Total e Relatório Robusto) pronto.")
 
     def cog_unload(self):
         self.ciclo_semanal_taxas.cancel()
@@ -22,11 +22,9 @@ class Taxas(commands.Cog):
     async def on_member_update(self, before, after):
         configs = await self.bot.db_manager.get_all_configs(['cargo_membro'])
         cargo_membro_id = int(configs.get('cargo_membro', '0') or 0)
-        if cargo_membro_id == 0:
-            return
+        if cargo_membro_id == 0: return
         cargo_membro = after.guild.get_role(cargo_membro_id)
-        if not cargo_membro:
-            return
+        if not cargo_membro: return
         if cargo_membro not in before.roles and cargo_membro in after.roles:
             await self.bot.db_manager.execute_query(
                 """INSERT INTO taxas (user_id, status_ciclo, data_entrada)
@@ -39,8 +37,7 @@ class Taxas(commands.Cog):
     async def regularizar_membro(self, membro, configs):
         cargo_inadimplente = membro.guild.get_role(int(configs.get('cargo_inadimplente', '0') or 0))
         cargo_membro = membro.guild.get_role(int(configs.get('cargo_membro', '0') or 0))
-        if not cargo_inadimplente or not cargo_membro:
-            return
+        if not cargo_inadimplente or not cargo_membro: return
         try:
             if cargo_inadimplente in membro.roles:
                 await membro.remove_roles(cargo_inadimplente, reason="Taxa regularizada")
@@ -50,33 +47,46 @@ class Taxas(commands.Cog):
             print(f"Erro de permissão para {membro.name}")
 
     async def _update_report_message(self, canal: discord.TextChannel, config_key: str, embed: discord.Embed):
-        """Cria ou edita a mensagem de relatório mapeada pela config_key."""
+        """Cria ou edita a mensagem de relatório mapeada pela config_key.
+        Se a edição falhar por conteúdo demasiado longo, envia uma mensagem simplificada."""
         try:
             msg_id = int(await self.bot.db_manager.get_config_value(config_key, '0') or 0)
         except Exception:
             msg_id = 0
-        try:
-            if msg_id != 0:
+
+        # tenta editar se existir
+        if msg_id != 0:
+            try:
                 msg = await canal.fetch_message(msg_id)
                 await msg.edit(content=None, embed=embed)
-            else:
-                raise discord.NotFound
-        except (discord.NotFound, discord.Forbidden):
+                return
+            except discord.NotFound:
+                msg_id = 0
+            except discord.HTTPException as e:
+                # edição falhou (possivelmente conteúdo demasiado longo) — proceder para criação de ficha de erro
+                print(f"HTTPException ao editar mensagem de relatório ({config_key}): {e}")
+
+        # criar nova mensagem (ou substituir se não existir)
+        try:
+            nova_msg = await canal.send(embed=embed)
+            await self.bot.db_manager.set_config_value(config_key, str(nova_msg.id))
+        except discord.HTTPException as e:
+            # problema ao enviar embed (provavelmente demasiado grande) — enviar versão resumida
             try:
-                nova_msg = await canal.send(embed=embed)
+                resumo = discord.Embed(title=embed.title, description="Lista muito extensa para enviar. Consulte a staff.", color=discord.Color.orange())
+                resumo.add_field(name="Total", value=str(len(embed.description.splitlines())) if embed.description else "—", inline=False)
+                nova_msg = await canal.send(embed=resumo)
                 await self.bot.db_manager.set_config_value(config_key, str(nova_msg.id))
-            except Exception as e:
-                print(f"Falha ao criar/atualizar mensagem de relatório ({config_key}): {e}")
+            except Exception as exc:
+                print(f"Falha ao criar/atualizar mensagem de relatório ({config_key}): {exc}")
 
     @tasks.loop(minutes=10)
     async def atualizar_relatorio_automatico(self):
         try:
             canal_id = int(await self.bot.db_manager.get_config_value('canal_relatorio_taxas', '0') or 0)
-            if canal_id == 0:
-                return
+            if canal_id == 0: return
             canal = self.bot.get_channel(canal_id)
-            if not canal:
-                return
+            if not canal: return
 
             registros = await self.bot.db_manager.execute_query("SELECT user_id, status_ciclo FROM taxas", fetch="all")
             status_map = defaultdict(list)
@@ -87,10 +97,13 @@ class Taxas(commands.Cog):
                 if membro:
                     status_map[status].append(membro.mention)
 
-            def format_list(mentions):
-                text = "\n".join(mentions) if mentions else "Nenhum membro nesta categoria."
-                if len(text) > 4096:
-                    return text[:4090] + "\n..."
+            def format_list(mentions, limit=40):
+                if not mentions:
+                    return "Nenhum membro nesta categoria."
+                display = mentions[:limit]
+                text = "\n".join(display)
+                if len(mentions) > limit:
+                    text += f"\n... e mais {len(mentions) - limit} membros."
                 return text
 
             pendentes = status_map.get('PENDENTE', [])
@@ -118,7 +131,7 @@ class Taxas(commands.Cog):
             await self._update_report_message(canal, 'taxa_msg_id_isentos', embed_isentos)
 
         except Exception as e:
-            print(f"Erro ao atualizar relatório automático: {e}")
+            print(f"Erro ao atualizar relatório automático de taxas: {e}")
 
     @atualizar_relatorio_automatico.before_loop
     async def before_relatorio(self):
@@ -132,14 +145,12 @@ class Taxas(commands.Cog):
 
     async def executar_ciclo_de_taxas(self, ctx=None, resetar_ciclo: bool = False):
         guild = ctx.guild if ctx else (self.bot.guilds[0] if self.bot.guilds else None)
-        if not guild:
-            return
+        if not guild: return
         configs = await self.bot.db_manager.get_all_configs(['cargo_membro', 'cargo_inadimplente', 'cargo_isento', 'canal_log_taxas'])
         canal_log = None
         try:
             canal_log_id = int(configs.get('canal_log_taxas', '0') or 0)
-            if canal_log_id:
-                canal_log = self.bot.get_channel(canal_log_id)
+            if canal_log_id: canal_log = self.bot.get_channel(canal_log_id)
         except Exception:
             canal_log = None
 
@@ -151,11 +162,9 @@ class Taxas(commands.Cog):
         for registro in membros_pendentes_db:
             user_id = registro.get('user_id')
             membro = guild.get_member(user_id)
-            if not membro:
-                continue
+            if not membro: continue
             isento_role = guild.get_role(int(configs.get('cargo_isento', '0') or 0))
-            if isento_role and isento_role in membro.roles:
-                continue
+            if isento_role and isento_role in membro.roles: continue
             data_entrada = registro.get('data_entrada')
             if data_entrada and data_entrada > uma_semana_atras:
                 novos_isentos.append(membro)
@@ -187,15 +196,11 @@ class Taxas(commands.Cog):
             embed.add_field(name="❌ Falhas", value="\n".join(falhas), inline=False)
 
         if ctx:
-            try:
-                await ctx.send(embed=embed)
-            except Exception:
-                pass
+            try: await ctx.send(embed=embed)
+            except Exception: pass
         if canal_log:
-            try:
-                await canal_log.send(embed=embed)
-            except Exception:
-                pass
+            try: await canal_log.send(embed=embed)
+            except Exception: pass
 
     @commands.command(name="pagar-taxa")
     async def pagar_taxa(self, ctx):
@@ -226,8 +231,7 @@ class Taxas(commands.Cog):
                 "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET status_ciclo = $2",
                 ctx.author.id, status_pagamento
             )
-            if atrasado:
-                await self.regularizar_membro(ctx.author, configs)
+            if atrasado: await self.regularizar_membro(ctx.author, configs)
             await ctx.send(f"✅ Taxa paga com sucesso! Seu status: **{status_pagamento}**.")
         except ValueError:
             await ctx.send(f"❌ Você não tem saldo suficiente. A taxa custa **{valor_taxa}** moedas.")
@@ -238,47 +242,37 @@ class Taxas(commands.Cog):
         await ctx.send("🔥 A forçar a execução do ciclo de penalidades (sem resetar quem já pagou)...")
         await self.executar_ciclo_de_taxas(ctx, resetar_ciclo=False)
 
-    # --- NOVO COMANDO DE EMERGÊNCIA E SINCRONIZAÇÃO ---
     @commands.command(name="sincronizar-pagamentos", hidden=True)
     @check_permission_level(4)
     async def sincronizar_pagamentos(self, ctx):
-        await ctx.send("⚙️ **Iniciando Sincronização Total de Pagamentos!**\nA analisar pagamentos em moedas e em prata desde o último reset...")
-
+        await ctx.send("⚙️ **Iniciando Sincronização Total de Pagamentos!**\nA analisar pagamentos em moedas e em prata...")
         configs = await self.bot.db_manager.get_all_configs(['taxa_dia_semana', 'taxa_semanal_valor', 'cargo_inadimplente', 'cargo_membro'])
         dia_reset = int(configs.get('taxa_dia_semana', '6') or 6)
         valor_taxa = int(configs.get('taxa_semanal_valor', 0) or 0)
-
         hoje = datetime.now(timezone.utc)
         dias_desde_reset = (hoje.weekday() - dia_reset + 7) % 7
         ultimo_reset = (hoje - timedelta(days=dias_desde_reset)).replace(hour=12, minute=0, second=0, microsecond=0)
 
-        # 1) pagamentos em moedas (transacoes)
         pagamentos_moedas = await self.bot.db_manager.execute_query(
             "SELECT DISTINCT user_id FROM transacoes WHERE descricao LIKE 'Pagamento de taxa semanal%' AND data >= $1 AND valor = $2",
             ultimo_reset, valor_taxa, fetch="all"
         )
         pagadores_moedas_ids = {p['user_id'] for p in pagamentos_moedas} if pagamentos_moedas else set()
 
-        # 2) submissões de prata já aprovadas
         pagamentos_prata = await self.bot.db_manager.execute_query(
             "SELECT user_id FROM submissoes_taxa WHERE status = 'aprovado'", fetch="all"
         )
         pagadores_prata_ids = {p['user_id'] for p in pagamentos_prata} if pagamentos_prata else set()
 
-        # 3) união das fontes
         todos_pagadores_ids = pagadores_moedas_ids.union(pagadores_prata_ids)
-
         if not todos_pagadores_ids:
             return await ctx.send("Nenhum pagamento (moedas ou prata) encontrado para sincronizar.")
 
         corrigidos, ja_regulares = [], []
-
         for user_id in todos_pagadores_ids:
             membro = ctx.guild.get_member(user_id)
-            if not membro:
-                continue
+            if not membro: continue
 
-            # atualiza o status na tabela de taxas
             await self.bot.db_manager.execute_query(
                 "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, 'PAGO_ATRASADO') ON CONFLICT (user_id) DO UPDATE SET status_ciclo = 'PAGO_ATRASADO'",
                 user_id
@@ -291,10 +285,7 @@ class Taxas(commands.Cog):
             else:
                 ja_regulares.append(membro.mention)
 
-        embed = discord.Embed(
-            title="✅ Sincronização de Pagamentos Concluída",
-            description=f"Analisado o período desde {ultimo_reset.strftime('%d/%m %H:%M')} UTC."
-        )
+        embed = discord.Embed(title="✅ Sincronização de Pagamentos Concluída", description=f"Analisado o período desde {ultimo_reset.strftime('%d/%m %H:%M')} UTC.")
         embed.add_field(name=f"Acesso Restaurado ({len(corrigidos)})", value="\n".join(corrigidos) or "Nenhum", inline=False)
         embed.add_field(name=f"Pagamentos Contabilizados ({len(ja_regulares)})", value="\n".join(ja_regulares) or "Nenhum", inline=False)
         await ctx.send(embed=embed)
@@ -306,7 +297,6 @@ class Taxas(commands.Cog):
         configs = await self.bot.db_manager.get_all_configs(['taxa_dia_semana', 'taxa_semanal_valor', 'cargo_inadimplente', 'cargo_membro'])
         dia_reset = int(configs.get('taxa_dia_semana', '6') or 6)
         valor_taxa = int(configs.get('taxa_semanal_valor', 0) or 0)
-
         hoje = datetime.now(timezone.utc)
         dias_desde_reset = (hoje.weekday() - dia_reset + 7) % 7
         ultimo_reset = (hoje - timedelta(days=dias_desde_reset)).replace(hour=12, minute=0, second=0, microsecond=0)
@@ -315,17 +305,14 @@ class Taxas(commands.Cog):
             "SELECT DISTINCT user_id FROM transacoes WHERE descricao LIKE 'Pagamento de taxa semanal%' AND data >= $1 AND valor = $2",
             ultimo_reset, valor_taxa, fetch="all"
         )
-
         if not pagamentos:
             return await ctx.send("Nenhum pagamento encontrado no período. Nenhuma correção necessária.")
 
         pagadores_ids = {p['user_id'] for p in pagamentos}
         corrigidos, ja_regulares = [], []
-
         for user_id in pagadores_ids:
             membro = ctx.guild.get_member(user_id)
-            if not membro:
-                continue
+            if not membro: continue
 
             await self.bot.db_manager.execute_query(
                 "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET status_ciclo = $2",
