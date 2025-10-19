@@ -12,70 +12,35 @@ class Admin(commands.Cog):
 
     async def initialize_database_schema(self):
         try:
-            # Estrutura de tabelas - usa $1, $2, etc. para asyncpg
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS banco (user_id BIGINT PRIMARY KEY, saldo BIGINT NOT NULL DEFAULT 0)")
-            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS transacoes (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL,
-                valor BIGINT NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)""")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS transacoes (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL, valor BIGINT NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)""")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS configuracoes (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)")
-            
-            # --- ATUALIZAÇÃO DA TABELA DE TAXAS ---
+
             await self.bot.db_manager.execute_query("""
-                CREATE TABLE IF NOT EXISTS taxas (
-                    user_id BIGINT PRIMARY KEY,
-                    status_ciclo TEXT DEFAULT 'PENDENTE',
-                    data_entrada TIMESTAMP WITH TIME ZONE
-                )
-            """)
-            # Adiciona as colunas se elas não existirem, para compatibilidade com instalações antigas
+                CREATE TABLE IF NOT EXISTS taxas (user_id BIGINT PRIMARY KEY, status_ciclo TEXT DEFAULT 'PENDENTE', data_entrada TIMESTAMP WITH TIME ZONE)""")
             try:
                 await self.bot.db_manager.execute_query("ALTER TABLE taxas ADD COLUMN IF NOT EXISTS status_ciclo TEXT DEFAULT 'PENDENTE'")
                 await self.bot.db_manager.execute_query("ALTER TABLE taxas ADD COLUMN IF NOT EXISTS data_entrada TIMESTAMP WITH TIME ZONE")
             except Exception as e:
-                print(f"Nota de migração: Não foi possível adicionar colunas a 'taxas'. Pode já estar atualizada. Erro: {e}")
+                print(f"Nota de migração: Não foi possível adicionar colunas a 'taxas'. Erro: {e}")
 
-            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS submissoes_orbe (id SERIAL PRIMARY KEY, message_id BIGINT, cor TEXT NOT NULL,
-                valor_total INTEGER NOT NULL, autor_id BIGINT, membros TEXT, status TEXT DEFAULT 'pendente')""")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS submissoes_orbe (id SERIAL PRIMARY KEY, message_id BIGINT, cor TEXT NOT NULL, valor_total INTEGER NOT NULL, autor_id BIGINT, membros TEXT, status TEXT DEFAULT 'pendente')""")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS loja (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS renda_passiva_log (user_id BIGINT, tipo TEXT, data DATE, valor INTEGER, PRIMARY KEY (user_id, tipo, data))")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS submissoes_taxa (message_id BIGINT PRIMARY KEY, user_id BIGINT, status TEXT)")
-            await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS puxadas_log (puxador_id BIGINT, data DATE, quantidade INTEGER, PRIMARY KEY (puxador_id, data))")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS reacoes_anuncios (user_id BIGINT, message_id BIGINT, PRIMARY KEY (user_id, message_id))")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS eventos (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, descricao TEXT, tipo_evento TEXT, data_evento TIMESTAMP WITH TIME ZONE, recompensa INTEGER DEFAULT 0, max_participantes INTEGER, criador_id BIGINT NOT NULL, message_id BIGINT, status TEXT DEFAULT 'AGENDADO', inscritos BIGINT[] DEFAULT '{}'::BIGINT[], cargo_requerido_id BIGINT, canal_voz_id BIGINT)""")
 
-            await self.bot.db_manager.execute_query("""
-                CREATE TABLE IF NOT EXISTS eventos (
-                    id SERIAL PRIMARY KEY, nome TEXT NOT NULL, descricao TEXT, tipo_evento TEXT,
-                    data_evento TIMESTAMP WITH TIME ZONE, recompensa INTEGER DEFAULT 0, max_participantes INTEGER,
-                    criador_id BIGINT NOT NULL, message_id BIGINT, status TEXT DEFAULT 'AGENDADO',
-                    inscritos BIGINT[] DEFAULT '{}'::BIGINT[], cargo_requerido_id BIGINT, canal_voz_id BIGINT
-                )
-            """)
-            try:
-                await self.bot.db_manager.execute_query("ALTER TABLE eventos ADD COLUMN IF NOT EXISTS cargo_requerido_id BIGINT")
-                await self.bot.db_manager.execute_query("ALTER TABLE eventos ADD COLUMN IF NOT EXISTS canal_voz_id BIGINT")
-            except Exception as e:
-                print(f"Nota de migração: Não foi possível adicionar colunas a 'eventos'. Erro: {e}")
-
-            # --- NOVAS CHAVES DE CONFIGURAÇÃO ---
             default_configs = {
-                'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
                 'taxa_semanal_valor': '500', 'taxa_dia_semana': '6', 'taxa_dia_abertura': '5',
                 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
-                'perm_nivel_1': '0', 'perm_nivel_2': '0', 'perm_nivel_3': '0', 'perm_nivel_4': '0',
-                'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
-                'canal_resgates': '0', 'canal_batepapo': '0', 'canal_log_taxas': '0',
-                'canal_eventos': '0', 'canal_planejamento': '0',
-                'canal_relatorio_taxas': '0',  # novo
-                'canal_pagamento_taxas': '0',  # novo
-                'canal_info_taxas': '0',       # novo
-                'taxa_relatorio_msg_id': '0',  # novo (mensagem persistente)
-                'recompensa_voz': '1', 'limite_voz': '120', 'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60', 'recompensa_reacao': '50',
-                'recompensa_puxar_bronze': '100', 'recompensa_puxar_ouro': '250', 'limite_puxadas_diario': '5'
+                'canal_relatorio_taxas': '0', 'canal_pagamento_taxas': '0', 'canal_info_taxas': '0',
+                'taxa_msg_id_pendentes': '0', 'taxa_msg_id_pagos': '0', 'taxa_msg_id_isentos': '0',
             }
             for chave, valor in default_configs.items():
                 await self.bot.db_manager.execute_query("INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING", chave, valor)
-            await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", 1)
-
-            print("Base de dados verificada e pronta (Estrutura de Taxas v2.2 com canais mapeados).")
+            
+            print("Base de dados verificada e pronta (Estrutura de Taxas v2.3 com Mapeamento Total).")
         except Exception as e:
             print(f"❌ Ocorreu um erro ao inicializar a base de dados: {e}")
             raise e

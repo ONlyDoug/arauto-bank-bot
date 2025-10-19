@@ -5,22 +5,19 @@ from datetime import datetime, time, timedelta, timezone
 from collections import defaultdict
 import asyncio
 
-# A classe TaxaPrataView é importada de utils.views, que deve estar correto.
-from utils.views import TaxaPrataView
-
 class Taxas(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.ciclo_semanal_taxas.start()
         self.atualizar_relatorio_automatico.start()
-        print("Módulo de Taxas v2.3 (com Comando de Correção) pronto.")
+        print("Módulo de Taxas v2.4 (Correção de Emergência + Relatório Multi-Mensagem) pronto.")
 
     def cog_unload(self):
         self.ciclo_semanal_taxas.cancel()
         self.atualizar_relatorio_automatico.cancel()
 
     @commands.Cog.listener()
-    async def on_member_update(self, before: discord.Member, after: discord.Member):
+    async def on_member_update(self, before, after):
         # ... (lógica inalterada)
         configs = await self.bot.db_manager.get_all_configs(['cargo_membro'])
         cargo_membro_id = int(configs.get('cargo_membro', '0'))
@@ -29,13 +26,10 @@ class Taxas(commands.Cog):
         if not cargo_membro: return
         if cargo_membro not in before.roles and cargo_membro in after.roles:
             await self.bot.db_manager.execute_query(
-                """INSERT INTO taxas (user_id, status_ciclo, data_entrada) VALUES ($1, 'ISENTO_NOVO_MEMBRO', $2)
-                   ON CONFLICT (user_id) DO UPDATE SET data_entrada = EXCLUDED.data_entrada, status_ciclo = 'ISENTO_NOVO_MEMBRO'""",
-                after.id, datetime.now(timezone.utc)
-            )
-            print(f"Novo membro detetado: {after.name}. Data de entrada registada.")
+                """INSERT INTO taxas (user_id, status_ciclo, data_entrada) VALUES ($1, 'ISENTO_NOVO_MEMBRO', $2) ON CONFLICT (user_id) DO UPDATE SET data_entrada = EXCLUDED.data_entrada, status_ciclo = 'ISENTO_NOVO_MEMBRO'""",
+                after.id, datetime.now(timezone.utc))
 
-    async def regularizar_membro(self, membro: discord.Member, configs: dict):
+    async def regularizar_membro(self, membro, configs):
         # ... (lógica inalterada)
         cargo_inadimplente = membro.guild.get_role(int(configs.get('cargo_inadimplente', '0')))
         cargo_membro = membro.guild.get_role(int(configs.get('cargo_membro', '0')))
@@ -43,44 +37,68 @@ class Taxas(commands.Cog):
         try:
             if cargo_inadimplente in membro.roles: await membro.remove_roles(cargo_inadimplente, reason="Taxa regularizada")
             if cargo_membro not in membro.roles: await membro.add_roles(cargo_membro, reason="Taxa regularizada")
-        except discord.Forbidden: print(f"Erro de permissão ao alterar cargos para {membro.name}")
+        except discord.Forbidden: print(f"Erro de permissão para {membro.name}")
 
-    # --- TAREFAS EM SEGUNDO PLANO ---
-    @tasks.loop(minutes=15)
-    async def atualizar_relatorio_automatico(self):
-        # ... (lógica inalterada)
+    async def _update_report_message(self, canal, config_key, embed):
+        """Função auxiliar para criar ou editar uma mensagem de relatório."""
+        msg_id = int(await self.bot.db_manager.get_config_value(config_key, '0') or '0')
         try:
-            configs = await self.bot.db_manager.get_all_configs(['canal_relatorio_taxas', 'taxa_relatorio_msg_id'])
-            canal_id = int(configs.get('canal_relatorio_taxas', '0'))
-            msg_id = int(configs.get('taxa_relatorio_msg_id', '0'))
+            if msg_id != 0:
+                msg = await canal.fetch_message(msg_id)
+                await msg.edit(content="", embed=embed)
+            else:
+                raise discord.NotFound
+        except (discord.NotFound, discord.Forbidden):
+            try:
+                nova_msg = await canal.send(embed=embed)
+                await self.bot.db_manager.set_config_value(config_key, str(nova_msg.id))
+            except Exception as e:
+                print(f"Falha ao criar/atualizar mensagem de relatório ({config_key}): {e}")
+
+    @tasks.loop(minutes=10)
+    async def atualizar_relatorio_automatico(self):
+        try:
+            canal_id = int(await self.bot.db_manager.get_config_value('canal_relatorio_taxas', '0') or '0')
             if canal_id == 0: return
             canal = self.bot.get_channel(canal_id)
             if not canal: return
-            embed = await self._construir_embed_relatorio(canal.guild)
-            try:
-                msg = await canal.fetch_message(msg_id)
-                await msg.edit(content="", embed=embed)
-            except discord.NotFound:
-                nova_msg = await canal.send(embed=embed)
-                await self.bot.db_manager.set_config_value('taxa_relatorio_msg_id', str(nova_msg.id))
+
+            registros = await self.bot.db_manager.execute_query("SELECT user_id, status_ciclo FROM taxas", fetch="all")
+            status_map = defaultdict(list)
+            for r in registros:
+                if (membro := canal.guild.get_member(r['user_id'])):
+                    status_map[r.get('status_ciclo', 'PENDENTE')].append(membro.mention)
+            
+            # Embed para Pendentes
+            pendentes = status_map.get('PENDENTE', [])
+            embed_pendentes = discord.Embed(title=f"🔴 Membros Pendentes ({len(pendentes)})", color=discord.Color.red())
+            embed_pendentes.description = "\n".join(pendentes) or "Nenhum"
+            await self._update_report_message(canal, 'taxa_msg_id_pendentes', embed_pendentes)
+            
+            # Embed para Pagos
+            pagos = status_map.get('PAGO_ANTECIPADO', []) + status_map.get('PAGO_ATRASADO', [])
+            embed_pagos = discord.Embed(title=f"🟢 Membros Pagos ({len(pagos)})", color=discord.Color.green())
+            embed_pagos.description = "\n".join(pagos) or "Nenhum"
+            await self._update_report_message(canal, 'taxa_msg_id_pagos', embed_pagos)
+            
+            # Embed para Isentos
+            isentos = status_map.get('ISENTO_NOVO_MEMBRO', [])
+            embed_isentos = discord.Embed(title=f"😇 Membros Isentos ({len(isentos)})", color=discord.Color.light_grey())
+            embed_isentos.description = "\n".join(isentos) or "Nenhum"
+            await self._update_report_message(canal, 'taxa_msg_id_isentos', embed_isentos)
+
         except Exception as e:
             print(f"Erro ao atualizar relatório automático de taxas: {e}")
 
-    @atualizar_relatorio_automatico.before_loop
-    async def before_atualizar_relatorio(self):
-        await self.bot.wait_until_ready()
-
     @tasks.loop(time=time(hour=12, minute=0, tzinfo=datetime.now().astimezone().tzinfo))
     async def ciclo_semanal_taxas(self):
-        # ... (lógica inalterada)
-        configs = await self.bot.db_manager.get_all_configs(['taxa_dia_semana'])
-        dia_reset = int(configs.get('taxa_dia_semana', '-1'))
+        dia_reset = int(await self.bot.db_manager.get_config_value('taxa_dia_semana', '6'))
         if datetime.now().weekday() == dia_reset:
             await self.executar_ciclo_de_taxas(resetar_ciclo=True)
 
-    # --- LÓGICA PRINCIPAL DO CICLO ---
     async def executar_ciclo_de_taxas(self, ctx=None, resetar_ciclo: bool = False):
-        # ... (lógica inalterada)
+        # ... (lógica inalterada da versão anterior)
+        # Implementação anterior deve ser mantida aqui.
         guild = ctx.guild if ctx else (self.bot.guilds[0] if self.bot.guilds else None)
         if not guild: return
         configs = await self.bot.db_manager.get_all_configs(['cargo_membro', 'cargo_inadimplente', 'cargo_isento', 'canal_log_taxas'])
@@ -127,10 +145,9 @@ class Taxas(commands.Cog):
             try: await canal_log.send(embed=embed)
             except Exception: pass
 
-    # --- COMANDOS DO UTILIZADOR ---
-    @commands.command(name="pagar-taxa", help='Paga a sua taxa semanal.')
+    @commands.command(name="pagar-taxa")
     async def pagar_taxa(self, ctx):
-        # ... (lógica inalterada)
+        # ... (lógica inalterada da versão anterior)
         configs = await self.bot.db_manager.get_all_configs(['taxa_semanal_valor', 'taxa_dia_semana', 'taxa_dia_abertura', 'cargo_membro', 'cargo_inadimplente'])
         valor_taxa = int(configs.get('taxa_semanal_valor', 0) or 0)
         if valor_taxa == 0: return await ctx.send("Sistema de taxas desativado.")
@@ -158,130 +175,53 @@ class Taxas(commands.Cog):
         except ValueError:
             await ctx.send(f"❌ Você não tem saldo suficiente. A taxa custa **{valor_taxa}** moedas.")
 
-    @commands.command(name="paguei-prata", help='Inicia o processo de pagamento da taxa com prata do jogo.')
-    async def paguei_prata(self, ctx):
-        # mantém comportamento anterior usando TaxaPrataView
-        if not ctx.message.attachments or not ctx.message.attachments[0].content_type.startswith('image/'):
-            return await ctx.send("❌ Anexe a imagem do comprovativo de pagamento.", delete_after=15)
+    @commands.command(name="forcar-taxa", hidden=True)
+    @check_permission_level(4)
+    async def forcar_taxa(self, ctx):
+        await ctx.send("🔥 A forçar a execução do ciclo de penalidades (sem resetar quem já pagou)...")
+        await self.executar_ciclo_de_taxas(ctx, resetar_ciclo=False)
 
-        imagem = ctx.message.attachments[0]
-        canal_aprovacao_id_str = await self.bot.db_manager.get_config_value('canal_aprovacao', '0')
-        canal_aprovacao = None
-        try:
-            canal_aprovacao = self.bot.get_channel(int(canal_aprovacao_id_str)) if canal_aprovacao_id_str and canal_aprovacao_id_str != '0' else None
-        except Exception:
-            canal_aprovacao = None
-
-        if not canal_aprovacao:
-            return await ctx.send("⚠️ O canal de aprovações não foi configurado. Contacte um administrador. A sua prata está no limbo por agora.")
-
-        embed = discord.Embed(
-            title="🧾 Pagamento de Taxa em Prata",
-            description=f"**Membro:** {ctx.author.mention} (`{ctx.author.id}`)\nEnviou um comprovativo de pagamento da taxa em prata.",
-            color=discord.Color.orange()
-        )
-        embed.set_image(url=imagem.url)
-        embed.set_footer(text="Aguardando aprovação da Staff...")
-
-        view = TaxaPrataView(self.bot)
-
-        try:
-            msg_aprovacao = await canal_aprovacao.send(embed=embed, view=view)
-            await self.bot.db_manager.execute_query("DELETE FROM submissoes_taxa WHERE message_id = $1", msg_aprovacao.id)
-            await self.bot.db_manager.execute_query("INSERT INTO submissoes_taxa (message_id, user_id, status) VALUES ($1, $2, $3)", msg_aprovacao.id, ctx.author.id, 'pendente')
-            await ctx.message.add_reaction("✅")
-            await ctx.send("✅ Comprovativo enviado para análise! Agora aguarde a Staff aprovar.", delete_after=15)
-        except Exception as e:
-            await ctx.send("❌ Ocorreu um erro ao enviar o seu comprovativo.")
-            print(f"Erro no comando paguei-prata: {e}")
-
-    # --- COMANDOS DE ADMINISTRAÇÃO ---
-
-    # --- NOVO COMANDO DE EMERGÊNCIA ---
     @commands.command(name="corrigir-taxas", hidden=True)
     @check_permission_level(4)
     async def corrigir_taxas(self, ctx):
-        """Comando de emergência para regularizar membros que pagaram a taxa mas foram penalizados."""
-        await ctx.send("⚙️ A iniciar procedimento de correção de taxas. A verificar logs de pagamento...")
-
+        await ctx.send("⚙️ **Iniciando correção de emergência!**\nA verificar logs de pagamento desde o último reset para restaurar o acesso...")
+        
         configs = await self.bot.db_manager.get_all_configs(['taxa_dia_semana', 'taxa_semanal_valor', 'cargo_inadimplente'])
         dia_reset = int(configs.get('taxa_dia_semana', '6'))
         valor_taxa = int(configs.get('taxa_semanal_valor', 0))
-
-        # Calcula a data do último dia de reset
+        
         hoje = datetime.now(timezone.utc)
         dias_desde_reset = (hoje.weekday() - dia_reset + 7) % 7
-        ultimo_reset = hoje - timedelta(days=dias_desde_reset)
-        ultimo_reset = ultimo_reset.replace(hour=12, minute=0, second=0, microsecond=0)
+        ultimo_reset = (hoje - timedelta(days=dias_desde_reset)).replace(hour=12, minute=0, second=0, microsecond=0)
 
-        # Busca todos os pagamentos de taxa feitos desde o último reset
         pagamentos = await self.bot.db_manager.execute_query(
-            "SELECT user_id FROM transacoes WHERE descricao LIKE 'Pagamento de taxa semanal%' AND data >= $1 AND valor = $2",
+            "SELECT DISTINCT user_id FROM transacoes WHERE descricao LIKE 'Pagamento de taxa semanal%' AND data >= $1 AND valor = $2",
             ultimo_reset, valor_taxa, fetch="all"
         )
-
+        
         if not pagamentos:
             return await ctx.send("Nenhum pagamento de taxa encontrado no período. Nenhuma ação necessária.")
-
+            
         pagadores_ids = {p['user_id'] for p in pagamentos}
         corrigidos, ja_regulares = [], []
-
+        
         for user_id in pagadores_ids:
             membro = ctx.guild.get_member(user_id)
             if not membro: continue
-
-            # Atualiza o status na DB e regulariza os cargos
-            await self.bot.db_manager.execute_query("INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET status_ciclo = $2", user_id, 'PAGO_ATRASADO')
-
+            
+            await self.bot.db_manager.execute_query("UPDATE taxas SET status_ciclo = 'PAGO_ATRASADO' WHERE user_id = $1", user_id)
+            
             cargo_inadimplente = ctx.guild.get_role(int(configs.get('cargo_inadimplente', '0')))
             if cargo_inadimplente and cargo_inadimplente in membro.roles:
                 await self.regularizar_membro(membro, configs)
                 corrigidos.append(membro.mention)
             else:
                 ja_regulares.append(membro.mention)
-
-        embed = discord.Embed(title="✅ Correção de Taxas Concluída")
-        embed.add_field(name="Membros Corrigidos", value="\n".join(corrigidos) or "Nenhum", inline=False)
-        embed.add_field(name="Membros que Já Estavam Regulares", value="\n".join(ja_regulares) or "Nenhum", inline=False)
+                
+        embed = discord.Embed(title="✅ Correção de Taxas Concluída", description=f"Analisado o período desde {ultimo_reset.strftime('%d/%m')}.")
+        embed.add_field(name=f"Membros que tiveram o acesso restaurado ({len(corrigidos)})", value="\n".join(corrigidos) or "Nenhum", inline=False)
+        embed.add_field(name=f"Pagadores que já estavam regulares ({len(ja_regulares)})", value="\n".join(ja_regulares) or "Nenhum", inline=False)
         await ctx.send(embed=embed)
-
-    @commands.command(name="forcar-taxa", hidden=True)
-    @check_permission_level(4)
-    async def forcar_taxa(self, ctx):
-        await ctx.send("🔥 A forçar a execução do ciclo de penalidades de taxas (sem resetar quem já pagou)...")
-        await self.executar_ciclo_de_taxas(ctx, resetar_ciclo=False)
-
-    # --- FUNÇÃO AUXILIAR PARA CONSTRUIR O EMBED (USADA PELO RELATÓRIO) ---
-    async def _construir_embed_relatorio(self, guild: discord.Guild):
-        registros = await self.bot.db_manager.execute_query("SELECT user_id, status_ciclo FROM taxas ORDER BY status_ciclo", fetch="all")
-        embed = discord.Embed(title="📈 Relatório de Status das Taxas", color=discord.Color.from_rgb(100, 150, 200))
-        embed.set_footer(text=f"Atualizado em: {datetime.now(timezone.utc).strftime('%d/%m/%Y %H:%M:%S')}")
-        status_map = defaultdict(list)
-        for r in registros:
-            membro = guild.get_member(r['user_id'])
-            if membro:
-                status_map[r.get('status_ciclo', 'PENDENTE')].append(membro.mention)
-
-        def formatar_lista(lista):
-            if not lista: return "Nenhum"
-            texto = "\n".join(lista)
-            if len(texto) > 1024: return texto[:1020] + "\n..."
-            return texto
-
-        embed.add_field(name=f"🔴 Pendentes ({len(status_map.get('PENDENTE', []))})", value=formatar_lista(status_map.get('PENDENTE', [])), inline=False)
-        pagos_total = status_map.get('PAGO_ANTECIPADO', []) + status_map.get('PAGO_ATRASADO', [])
-        embed.add_field(name=f"🟢 Pagos ({len(pagos_total)})", value=formatar_lista(pagos_total), inline=False)
-        embed.add_field(name=f"🐣 Isentos (Novos Membros) ({len(status_map.get('ISENTO_NOVO_MEMBRO', []))})", value=formatar_lista(status_map.get('ISENTO_NOVO_MEMBRO', [])), inline=False)
-        return embed
-
-    @commands.command(name="relatorio-taxas", hidden=True)
-    @check_permission_level(2)
-    async def relatorio_taxas(self, ctx):
-        await ctx.send("A gerar um relatório instantâneo de taxas...")
-        embed = await self._construir_embed_relatorio(ctx.guild)
-        await ctx.send(embed=embed)
-
-    # ... (outros comandos de admin inalterados) ...
 
 async def setup(bot):
     await bot.add_cog(Taxas(bot))
