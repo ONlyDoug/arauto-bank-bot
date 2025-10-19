@@ -31,16 +31,26 @@ class Admin(commands.Cog):
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS reacoes_anuncios (user_id BIGINT, message_id BIGINT, PRIMARY KEY (user_id, message_id))")
             await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS eventos (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, descricao TEXT, tipo_evento TEXT, data_evento TIMESTAMP WITH TIME ZONE, recompensa INTEGER DEFAULT 0, max_participantes INTEGER, criador_id BIGINT NOT NULL, message_id BIGINT, status TEXT DEFAULT 'AGENDADO', inscritos BIGINT[] DEFAULT '{}'::BIGINT[], cargo_requerido_id BIGINT, canal_voz_id BIGINT)""")
 
+            # --- CHAVES DE CONFIGURAÇÃO ATUALIZADAS ---
             default_configs = {
                 'taxa_semanal_valor': '500', 'taxa_dia_semana': '6', 'taxa_dia_abertura': '5',
                 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
                 'canal_relatorio_taxas': '0', 'canal_pagamento_taxas': '0', 'canal_info_taxas': '0',
-                'taxa_msg_id_pendentes': '0', 'taxa_msg_id_pagos': '0', 'taxa_msg_id_isentos': '0',
+                'taxa_msg_id_pendentes': '0',
+                'taxa_msg_id_pagos': '0',
+                'taxa_msg_id_isentos': '0',
+                # ... (resto das configs existentes devem permanecer) ...
             }
             for chave, valor in default_configs.items():
-                await self.bot.db_manager.execute_query("INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING", chave, valor)
-            
-            print("Base de dados verificada e pronta (Estrutura de Taxas v2.3 com Mapeamento Total).")
+                await self.bot.db_manager.execute_query(
+                    "INSERT INTO configuracoes (chave, valor) VALUES ($1, $2) ON CONFLICT (chave) DO NOTHING",
+                    chave, valor
+                )
+
+            # garante existência do tesouro na tabela banco
+            await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", self.ID_TESOURO_GUILDA)
+
+            print("Base de dados verificada (Estrutura de Taxas v2.4 com Relatório Multi-Mensagem).")
         except Exception as e:
             print(f"❌ Ocorreu um erro ao inicializar a base de dados: {e}")
             raise e
