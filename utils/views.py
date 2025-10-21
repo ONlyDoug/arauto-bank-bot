@@ -103,7 +103,6 @@ class TaxaPrataView(discord.ui.View):
                 interaction.message.id, fetch="one"
             )
             if not submissao:
-                # submissão já tratada
                 embed = interaction.message.embeds[0]
                 embed.description += "\n\n**Esta submissão já foi tratada.**"
                 for item in self.children: item.disabled = True
@@ -117,49 +116,42 @@ class TaxaPrataView(discord.ui.View):
                 taxas_cog = self.bot.get_cog('Taxas')
                 configs = await db_manager.get_all_configs(['cargo_membro', 'cargo_inadimplente'])
                 
-                # CORREÇÃO: Atualiza o status no novo sistema de taxas
                 await db_manager.execute_query(
                     "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, 'PAGO_ATRASADO') ON CONFLICT (user_id) DO UPDATE SET status_ciclo = 'PAGO_ATRASADO'",
                     user_id
                 )
                 
-                # Regulariza os cargos do membro
                 await taxas_cog.regularizar_membro(membro, configs)
 
-            # Marca a submissão como processada
             await db_manager.execute_query(
                 "UPDATE submissoes_taxa SET status = $1 WHERE message_id = $2",
                 novo_status, interaction.message.id
             )
 
-            # Edita o embed e desativa botões
             embed = interaction.message.embeds[0]
             if novo_status == "aprovado":
                 embed.color = discord.Color.green()
                 embed.title = "✅ Pagamento de Taxa (Prata) APROVADO"
                 embed.set_footer(text=f"Aprovado por: {interaction.user.display_name}")
-            else: # Recusado
+            else:
                 embed.color = discord.Color.red()
                 embed.title = "❌ Pagamento de Taxa (Prata) RECUSADO"
                 embed.set_footer(text=f"Recusado por: {interaction.user.display_name}")
             
-            for item in self.children:
-                item.disabled = True
+            for item in self.children: item.disabled = True
             await interaction.message.edit(embed=embed, view=self)
-            
-            # Enviar DM para o membro
+
             if membro:
                 try:
                     if novo_status == "aprovado":
-                        await membro.send("✅ O seu pagamento de taxa em prata foi **APROVADO**! O seu acesso aos canais da guilda foi restaurado. Bom jogo!")
+                        await membro.send("✅ O seu pagamento de taxa em prata foi **APROVADO**! O seu acesso foi restaurado.")
                     else:
-                        await membro.send("❌ O seu comprovativo de pagamento de taxa em prata foi **RECUSADO**. Por favor, contacte um staff para perceber o motivo.")
+                        await membro.send("❌ O seu comprovativo de pagamento de taxa foi **RECUSADO**.")
                 except discord.Forbidden:
-                    print(f"Não foi possível enviar DM para o utilizador {user_id}. Provavelmente tem as DMs desativadas.")
-            
+                    print(f"Não foi possível enviar DM para {user_id}.")
+
         except Exception as e:
             print(f"Erro ao processar aprovação de taxa prata: {e}")
-            await interaction.followup.send("Ocorreu um erro ao processar a sua ação.", ephemeral=True)
 
     @discord.ui.button(label="Aprovar", style=discord.ButtonStyle.success, custom_id="aprovar_taxa_prata")
     async def aprovar_button(self, interaction: discord.Interaction, button: discord.ui.Button):

@@ -12,7 +12,7 @@ class Taxas(commands.Cog):
         self.bot = bot
         self.ciclo_semanal_taxas.start()
         self.atualizar_relatorio_automatico.start()
-        print("Módulo de Taxas v2.5 (Sincronização Total e Relatório Robusto) pronto.")
+        print("Módulo de Taxas v2.6 (Sincronização e Relatórios Robustos) pronto.")
 
     def cog_unload(self):
         self.ciclo_semanal_taxas.cancel()
@@ -31,7 +31,7 @@ class Taxas(commands.Cog):
                    VALUES ($1, 'ISENTO_NOVO_MEMBRO', $2)
                    ON CONFLICT (user_id) DO UPDATE
                    SET data_entrada = EXCLUDED.data_entrada, status_ciclo = 'ISENTO_NOVO_MEMBRO'""",
-                after.id, datetime.now(timezone.utc)
+                after.id, datetime.now(timezone)
             )
 
     async def regularizar_membro(self, membro, configs):
@@ -39,54 +39,43 @@ class Taxas(commands.Cog):
         cargo_membro = membro.guild.get_role(int(configs.get('cargo_membro', '0') or 0))
         if not cargo_inadimplente or not cargo_membro: return
         try:
-            if cargo_inadimplente in membro.roles:
-                await membro.remove_roles(cargo_inadimplente, reason="Taxa regularizada")
-            if cargo_membro not in membro.roles:
-                await membro.add_roles(cargo_membro, reason="Taxa regularizada")
-        except discord.Forbidden:
-            print(f"Erro de permissão para {membro.name}")
+            if cargo_inadimplente in membro.roles: await membro.remove_roles(cargo_inadimplente, reason="Taxa regularizada")
+            if cargo_membro not in membro.roles: await membro.add_roles(cargo_membro, reason="Taxa regularizada")
+        except discord.Forbidden: print(f"Erro de permissão para {membro.name}")
 
     async def _update_report_message(self, canal: discord.TextChannel, config_key: str, embed: discord.Embed):
-        """Cria ou edita a mensagem de relatório mapeada pela config_key.
-        Se a edição falhar por conteúdo demasiado longo, envia uma mensagem simplificada."""
         try:
             msg_id = int(await self.bot.db_manager.get_config_value(config_key, '0') or 0)
-        except Exception:
-            msg_id = 0
-
-        # tenta editar se existir
-        if msg_id != 0:
-            try:
-                msg = await canal.fetch_message(msg_id)
-                await msg.edit(content=None, embed=embed)
-                return
-            except discord.NotFound:
-                msg_id = 0
-            except discord.HTTPException as e:
-                # edição falhou (possivelmente conteúdo demasiado longo) — proceder para criação de ficha de erro
-                print(f"HTTPException ao editar mensagem de relatório ({config_key}): {e}")
-
-        # criar nova mensagem (ou substituir se não existir)
-        try:
+            msg = await canal.fetch_message(msg_id)
+            await msg.edit(content=None, embed=embed)
+        except discord.NotFound:
             nova_msg = await canal.send(embed=embed)
             await self.bot.db_manager.set_config_value(config_key, str(nova_msg.id))
         except discord.HTTPException as e:
-            # problema ao enviar embed (provavelmente demasiado grande) — enviar versão resumida
+            # tenta detectar erro de "Invalid Form Body" por tamanho/formatos inválidos
             try:
-                resumo = discord.Embed(title=embed.title, description="Lista muito extensa para enviar. Consulte a staff.", color=discord.Color.orange())
-                resumo.add_field(name="Total", value=str(len(embed.description.splitlines())) if embed.description else "—", inline=False)
-                nova_msg = await canal.send(embed=resumo)
-                await self.bot.db_manager.set_config_value(config_key, str(nova_msg.id))
-            except Exception as exc:
-                print(f"Falha ao criar/atualizar mensagem de relatório ({config_key}): {exc}")
+                if getattr(e, "code", None) == 50035:
+                    error_embed = discord.Embed(
+                        title=embed.title,
+                        description="Erro: A lista de membros é demasiado longa para ser exibida.",
+                        color=discord.Color.orange()
+                    )
+                    # envia uma versão reduzida (recursivo controlado — error_embed pequeno)
+                    await self._update_report_message(canal, config_key, error_embed)
+            except Exception:
+                pass
+            print(f"Erro de HTTP ao editar relatório: {e}")
+
 
     @tasks.loop(minutes=10)
     async def atualizar_relatorio_automatico(self):
         try:
             canal_id = int(await self.bot.db_manager.get_config_value('canal_relatorio_taxas', '0') or 0)
-            if canal_id == 0: return
+            if canal_id == 0:
+                return
             canal = self.bot.get_channel(canal_id)
-            if not canal: return
+            if not canal:
+                return
 
             registros = await self.bot.db_manager.execute_query("SELECT user_id, status_ciclo FROM taxas", fetch="all")
             status_map = defaultdict(list)
@@ -158,7 +147,7 @@ class Taxas(commands.Cog):
             "SELECT user_id, data_entrada FROM taxas WHERE status_ciclo = 'PENDENTE'", fetch="all"
         )
         novos_isentos, inadimplentes, falhas = [], [], []
-        uma_semana_atras = datetime.now(timezone.utc) - timedelta(days=7)
+        uma_semana_atras = datetime.now(timezone) - timedelta(days=7)
         for registro in membros_pendentes_db:
             user_id = registro.get('user_id')
             membro = guild.get_member(user_id)
@@ -181,7 +170,7 @@ class Taxas(commands.Cog):
             except Exception as e:
                 falhas.append(f"{membro.name} ({e})")
 
-        embed = discord.Embed(title="Relatório do Ciclo de Taxas", timestamp=datetime.now(timezone.utc))
+        embed = discord.Embed(title="Relatório do Ciclo de Taxas", timestamp=datetime.now(timezone))
         embed.description = "**Modo: Aplicação de Penalidades**"
         embed.add_field(name="✅ Inadimplentes Aplicados", value=f"{len(inadimplentes)} membros.", inline=False)
         embed.add_field(name="🐣 Novos Membros Isentos", value=f"{len(novos_isentos)} membros.", inline=False)
@@ -249,12 +238,12 @@ class Taxas(commands.Cog):
         configs = await self.bot.db_manager.get_all_configs(['taxa_dia_semana', 'taxa_semanal_valor', 'cargo_inadimplente', 'cargo_membro'])
         dia_reset = int(configs.get('taxa_dia_semana', '6') or 6)
         valor_taxa = int(configs.get('taxa_semanal_valor', 0) or 0)
-        hoje = datetime.now(timezone.utc)
+        hoje = datetime.now(timezone)
         dias_desde_reset = (hoje.weekday() - dia_reset + 7) % 7
         ultimo_reset = (hoje - timedelta(days=dias_desde_reset)).replace(hour=12, minute=0, second=0, microsecond=0)
 
         pagamentos_moedas = await self.bot.db_manager.execute_query(
-            "SELECT DISTINCT user_id FROM transacoes WHERE descricao LIKE 'Pagamento de taxa semanal%' AND data >= $1 AND valor = $2",
+            "SELECT DISTINCT user_id FROM transacoes WHERE (descricao LIKE 'Pagamento de taxa semanal%') AND data >= $1 AND valor = $2",
             ultimo_reset, valor_taxa, fetch="all"
         )
         pagadores_moedas_ids = {p['user_id'] for p in pagamentos_moedas} if pagamentos_moedas else set()
@@ -285,9 +274,21 @@ class Taxas(commands.Cog):
             else:
                 ja_regulares.append(membro.mention)
 
+        def format_report_list(mentions):
+            if not mentions: return "Nenhum"
+            text = "\n".join(mentions)
+            if len(text) > 1024:
+                truncated_text = text[:1000]
+                last_newline = truncated_text.rfind('\n')
+                if last_newline != -1:
+                    truncated_text = truncated_text[:last_newline]
+                num_omitted = len(mentions) - truncated_text.count('\n') - 1
+                return f"{truncated_text}\n... e mais {num_omitted} membros."
+            return text
+
         embed = discord.Embed(title="✅ Sincronização de Pagamentos Concluída", description=f"Analisado o período desde {ultimo_reset.strftime('%d/%m %H:%M')} UTC.")
-        embed.add_field(name=f"Acesso Restaurado ({len(corrigidos)})", value="\n".join(corrigidos) or "Nenhum", inline=False)
-        embed.add_field(name=f"Pagamentos Contabilizados ({len(ja_regulares)})", value="\n".join(ja_regulares) or "Nenhum", inline=False)
+        embed.add_field(name=f"Acesso Restaurado ({len(corrigidos)})", value=format_report_list(corrigidos), inline=False)
+        embed.add_field(name=f"Pagamentos Contabilizados ({len(ja_regulares)})", value=format_report_list(ja_regulares), inline=False)
         await ctx.send(embed=embed)
 
     @commands.command(name="corrigir-taxas", hidden=True)
@@ -297,7 +298,7 @@ class Taxas(commands.Cog):
         configs = await self.bot.db_manager.get_all_configs(['taxa_dia_semana', 'taxa_semanal_valor', 'cargo_inadimplente', 'cargo_membro'])
         dia_reset = int(configs.get('taxa_dia_semana', '6') or 6)
         valor_taxa = int(configs.get('taxa_semanal_valor', 0) or 0)
-        hoje = datetime.now(timezone.utc)
+        hoje = datetime.now(timezone)
         dias_desde_reset = (hoje.weekday() - dia_reset + 7) % 7
         ultimo_reset = (hoje - timedelta(days=dias_desde_reset)).replace(hour=12, minute=0, second=0, microsecond=0)
 
