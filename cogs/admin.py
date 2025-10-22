@@ -464,6 +464,22 @@ class Admin(commands.Cog):
         await ctx.send(embed=embed)
 
 
+    @commands.group(name="configtaxa", invoke_without_command=True, hidden=True)
+    @check_permission_level(4)
+    async def config_taxa(self, ctx): await ctx.send("Use `!configtaxa moedas <on|off>`.")
+    @config_taxa.command(name="moedas")
+    async def config_taxa_moedas(self, ctx, estado: str):
+        valor_bool = 'true' if estado.lower() == 'on' else 'false'
+        try:
+            await self.bot.db_manager.set_config_value('taxa_aceitar_moedas', valor_bool)
+            # --- DEBUGGING PRINT ---
+            print(f"[DEBUG][configtaxa moedas] Tentando definir taxa_aceitar_moedas para: '{valor_bool}'")
+            # --- FIM DEBUG ---
+            await ctx.send(f"✅ Pagamento com moedas (`!pagar-taxa`) **{'ATIVADO' if valor_bool == 'true' else 'DESATIVADO'}**.")
+        except Exception as e:
+            print(f"[DEBUG][configtaxa moedas] Erro ao definir config: {e}")
+            await ctx.send(f"❌ Erro ao tentar definir a configuração: {e}")
+    
     # ... (outros comandos admin inalterados) ...
 
 async def setup(bot): await bot.add_cog(Admin(bot))

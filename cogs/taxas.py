@@ -374,8 +374,13 @@ class Taxas(commands.Cog):
             'cargo_membro', 'cargo_inadimplente', 'canal_pagamento_taxas'
         ])
 
-        # Verifica se o comando está desativado
-        if configs.get('taxa_aceitar_moedas', 'true') == 'false':
+        # --- DEBUGGING PRINT ---
+        valor_lido = configs.get('taxa_aceitar_moedas', 'true')  # Pega o valor lido ou o default
+        print(f"[DEBUG][pagar-taxa] Valor lido para taxa_aceitar_moedas: '{valor_lido}' (Tipo: {type(valor_lido)})")
+        # --- FIM DEBUG ---
+
+        # Verifica se o comando está desativado (usando o valor que acabamos de ler e imprimir)
+        if valor_lido == 'false':
             try:
                 await ctx.message.delete()
             except:
