@@ -92,66 +92,63 @@ class TaxaPrataView(discord.ui.View):
         self.bot = bot
 
     async def handle_interaction(self, interaction: discord.Interaction, novo_status: str):
-        if not await check_permission_level(2).predicate(interaction):
-            return
+        if not await check_permission_level(2).predicate(interaction): return
         await interaction.response.defer()
         db_manager = self.bot.db_manager
 
         try:
+            # Busca a submissão PENDENTE pelo message_id
             submissao = await db_manager.execute_query(
-                "SELECT user_id FROM submissoes_taxa WHERE message_id = $1 AND status = 'pendente'",
+                "SELECT id, user_id FROM submissoes_taxa WHERE message_id = $1 AND status = 'pendente'",
                 interaction.message.id, fetch="one"
             )
             if not submissao:
+                # Já tratada, edita a mensagem e sai
                 embed = interaction.message.embeds[0]
-                embed.description += "\n\n**Esta submissão já foi tratada.**"
+                embed.description = (embed.description or "") + "\n\n**Esta submissão já foi tratada.**"
                 for item in self.children: item.disabled = True
-                await interaction.message.edit(embed=embed, view=self)
+                await interaction.edit_original_response(embed=embed, view=self)
                 return
 
+            submissao_id = submissao['id']
             user_id = submissao['user_id']
             membro = interaction.guild.get_member(user_id)
+
+            # Marca a submissão como processada PRIMEIRO para evitar dupla execução
+            await db_manager.execute_query(
+                "UPDATE submissoes_taxa SET status = $1 WHERE id = $2",
+                novo_status, submissao_id
+            )
 
             if novo_status == "aprovado" and membro:
                 taxas_cog = self.bot.get_cog('Taxas')
                 configs = await db_manager.get_all_configs(['cargo_membro', 'cargo_inadimplente'])
-
+                # Atualiza status na tabela principal de taxas
                 await db_manager.execute_query(
                     "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, 'PAGO_ATRASADO') ON CONFLICT (user_id) DO UPDATE SET status_ciclo = 'PAGO_ATRASADO'",
                     user_id
                 )
-
+                # Restaura os cargos
                 await taxas_cog.regularizar_membro(membro, configs)
 
-            await db_manager.execute_query(
-                "UPDATE submissoes_taxa SET status = $1 WHERE message_id = $2",
-                novo_status, interaction.message.id
-            )
-
+            # Edita o embed de aprovação
             embed = interaction.message.embeds[0]
-            if novo_status == "aprovado":
-                embed.color = discord.Color.green()
-                embed.title = "✅ Pagamento de Taxa (Prata) APROVADO"
-                embed.set_footer(text=f"Aprovado por: {interaction.user.display_name}")
-            else:
-                embed.color = discord.Color.red()
-                embed.title = "❌ Pagamento de Taxa (Prata) RECUSADO"
-                embed.set_footer(text=f"Recusado por: {interaction.user.display_name}")
-
+            embed.color = discord.Color.green() if novo_status == "aprovado" else discord.Color.red()
+            embed.title = f"{'✅' if novo_status == 'aprovado' else '❌'} Pagamento (Prata) {novo_status.upper()}"
+            embed.set_footer(text=f"{novo_status.capitalize()} por: {interaction.user.display_name}")
             for item in self.children: item.disabled = True
-            await interaction.message.edit(embed=embed, view=self)
+            await interaction.edit_original_response(embed=embed, view=self)
 
+            # Envia DM
             if membro:
                 try:
-                    if novo_status == "aprovado":
-                        await membro.send(f"🎉 Boas notícias, {membro.mention}! Seu comprovativo de pagamento da taxa em prata foi **APROVADO** pela staff. Seu acesso foi restaurado. Bom jogo!")
-                    else:
-                        await membro.send(f"😕 Atenção, {membro.mention}. Seu comprovativo de pagamento da taxa em prata foi **RECUSADO** por `{interaction.user.name}`. Por favor, entre em contato com a staff para entender o motivo ou envie um novo comprovativo.")
-                except discord.Forbidden:
-                    print(f"Não foi possível enviar DM para {user_id} (taxa prata).")
+                    msg = f"🎉 Seu comprovativo (prata) foi **APROVADO**! Acesso restaurado." if novo_status == "aprovado" else f"😕 Seu comprovativo (prata) foi **RECUSADO** por {interaction.user.mention}. Contacte a staff."
+                    await membro.send(msg)
+                except Exception as e: print(f"Falha DM {user_id}: {e}")
 
         except Exception as e:
-            print(f"Erro ao processar aprovação de taxa prata: {e}")
+            print(f"Erro handle_interaction TaxaPrataView: {e}")
+            await interaction.followup.send("❌ Erro ao processar.", ephemeral=True)
 
     @discord.ui.button(label="Aprovar", style=discord.ButtonStyle.success, custom_id="aprovar_taxa_prata")
     async def aprovar_button(self, interaction: discord.Interaction, button: discord.ui.Button):

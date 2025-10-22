@@ -9,7 +9,7 @@ from collections import defaultdict
 DEFAULT_CONFIGS = {
     'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
     'taxa_semanal_valor': '500', 'taxa_dia_semana': '6', 'taxa_dia_abertura': '5',
-    'taxa_aceitar_moedas': 'true', # <-- NOVA CONFIG (true/false)
+    'taxa_aceitar_moedas': 'true', # Toggle para !pagar-taxa
     'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
     'perm_nivel_1': '', 'perm_nivel_2': '', 'perm_nivel_3': '', 'perm_nivel_4': '',
     'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
@@ -18,9 +18,9 @@ DEFAULT_CONFIGS = {
     'canal_relatorio_taxas': '0', 'canal_pagamento_taxas': '0', 'canal_info_taxas': '0',
     'taxa_msg_id_pendentes': '0', 'taxa_msg_id_pagos': '0',
     'taxa_msg_id_isentos_novos': '0', 'taxa_msg_id_isentos_cargo': '0',
-    'taxa_mensagem_inadimplente': 'Olá {member}! A taxa semanal de {tax_value} moedas não foi paga...',
-    'taxa_mensagem_abertura': '✅ Janela de pagamento ABERTA! Use `!pagar-taxa` ou `!paguei-prata`.',
-    'taxa_mensagem_reset': '⚠️ Hoje é o último dia para pagar a taxa!',
+    'taxa_mensagem_inadimplente': 'Olá {member}! A taxa semanal de {tax_value} moedas não foi paga. O seu acesso foi temporariamente restringido. Use `!pagar-taxa` ou `!paguei-prata` para regularizar.',
+    'taxa_mensagem_abertura': '✅ A janela para pagamento da taxa semanal está **ABERTA**! Use `!pagar-taxa` ou `!paguei-prata` até Domingo.',
+    'taxa_mensagem_reset': '⚠️ Hoje é o dia do reset das taxas! Este é o último dia para efetuar o pagamento e evitar a restrição de acesso.',
     'recompensa_voz': '1', 'limite_voz': '120', 'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60', 'recompensa_reacao': '50',
 }
 
@@ -31,73 +31,55 @@ class Admin(commands.Cog):
 
     async def initialize_database_schema(self):
         try:
-            # Criação de tabelas essenciais
+            # Cria/Verifica Tabelas Essenciais
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS banco (user_id BIGINT PRIMARY KEY, saldo BIGINT NOT NULL DEFAULT 0)")
-            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS transacoes (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL, valor BIGINT NOT NULL, descricao TEXT, data TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)""")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS transacoes (id SERIAL PRIMARY KEY, user_id BIGINT NOT NULL, tipo TEXT NOT NULL, valor BIGINT NOT NULL, descricao TEXT, data TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)""")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS configuracoes (chave TEXT PRIMARY KEY, valor TEXT NOT NULL)")
-
-            # Tabela Taxas (com colunas atualizadas)
-            await self.bot.db_manager.execute_query("""
-                CREATE TABLE IF NOT EXISTS taxas (
-                    user_id BIGINT PRIMARY KEY,
-                    status_ciclo TEXT DEFAULT 'PENDENTE',
-                    data_entrada TIMESTAMP WITH TIME ZONE
-                )""")
-            # Garante compatibilidade adicionando colunas se não existirem
-            try:
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS taxas (user_id BIGINT PRIMARY KEY, status_ciclo TEXT DEFAULT 'PENDENTE', data_entrada TIMESTAMPTZ)""")
+            try: # Garante compatibilidade
                 await self.bot.db_manager.execute_query("ALTER TABLE taxas ADD COLUMN IF NOT EXISTS status_ciclo TEXT DEFAULT 'PENDENTE'")
-                await self.bot.db_manager.execute_query("ALTER TABLE taxas ADD COLUMN IF NOT EXISTS data_entrada TIMESTAMP WITH TIME ZONE")
-            except Exception as e:
-                print(f"Nota de migração (taxas): {e}")
+                await self.bot.db_manager.execute_query("ALTER TABLE taxas ADD COLUMN IF NOT EXISTS data_entrada TIMESTAMPTZ")
+            except Exception as e: print(f"Nota (taxas): {e}")
 
-            # Outras tabelas
             await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS submissoes_orbe (id SERIAL PRIMARY KEY, message_id BIGINT, cor TEXT NOT NULL, valor_total INTEGER NOT NULL, autor_id BIGINT, membros TEXT, status TEXT DEFAULT 'pendente')""")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS loja (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, preco INTEGER NOT NULL, descricao TEXT)")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS renda_passiva_log (user_id BIGINT, tipo TEXT, data DATE, valor INTEGER, PRIMARY KEY (user_id, tipo, data))")
-            # submissoes_taxa atualizado para suportar id e anexo_url
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS submissoes_taxa (id SERIAL PRIMARY KEY, message_id BIGINT, user_id BIGINT, status TEXT, anexo_url TEXT)")
-            # Tenta migrar caso existam estruturas antigas
-            try:
-                await self.bot.db_manager.execute_query("ALTER TABLE submissoes_taxa ADD COLUMN IF NOT EXISTS id SERIAL PRIMARY KEY")
-                await self.bot.db_manager.execute_query("ALTER TABLE submissoes_taxa ADD COLUMN IF NOT EXISTS anexo_url TEXT")
-                await self.bot.db_manager.execute_query("ALTER TABLE submissoes_taxa DROP CONSTRAINT IF EXISTS submissoes_taxa_pkey")
-                await self.bot.db_manager.execute_query("ALTER TABLE submissoes_taxa ADD PRIMARY KEY (id)")
-            except Exception as e:
-                print(f"Nota de migração (submissoes_taxa): {e}")
-
+            try: # Garante compatibilidade
+                 await self.bot.db_manager.execute_query("ALTER TABLE submissoes_taxa ADD COLUMN IF NOT EXISTS id SERIAL")
+                 await self.bot.db_manager.execute_query("ALTER TABLE submissoes_taxa ADD COLUMN IF NOT EXISTS anexo_url TEXT")
+                 await self.bot.db_manager.execute_query("ALTER TABLE submissoes_taxa DROP CONSTRAINT IF EXISTS submissoes_taxa_pkey")
+                 await self.bot.db_manager.execute_query("ALTER TABLE submissoes_taxa ADD PRIMARY KEY (id)")
+            except Exception as e: print(f"Nota (submissoes_taxa): {e}")
             await self.bot.db_manager.execute_query("CREATE TABLE IF NOT EXISTS reacoes_anuncios (user_id BIGINT, message_id BIGINT, PRIMARY KEY (user_id, message_id))")
-            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS eventos (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, descricao TEXT, tipo_evento TEXT, data_evento TIMESTAMP WITH TIME ZONE, recompensa INTEGER DEFAULT 0, max_participantes INTEGER, criador_id BIGINT NOT NULL, message_id BIGINT, status TEXT DEFAULT 'AGENDADO', inscritos BIGINT[] DEFAULT '{}'::BIGINT[], cargo_requerido_id BIGINT, canal_voz_id BIGINT)""")
+            await self.bot.db_manager.execute_query("""CREATE TABLE IF NOT EXISTS eventos (id SERIAL PRIMARY KEY, nome TEXT NOT NULL, descricao TEXT, tipo_evento TEXT, data_evento TIMESTAMPTZ, recompensa INTEGER DEFAULT 0, max_participantes INTEGER, criador_id BIGINT NOT NULL, message_id BIGINT, status TEXT DEFAULT 'AGENDADO', inscritos BIGINT[] DEFAULT '{}'::BIGINT[], cargo_requerido_id BIGINT, canal_voz_id BIGINT)""")
 
-            # Garante que as configurações padrão só sejam inseridas se não existirem
+            # Garante Configs Padrão
             await self.bot.db_manager.execute_query(
                  "INSERT INTO configuracoes (chave, valor) SELECT * FROM UNNEST($1::TEXT[], $2::TEXT[]) ON CONFLICT (chave) DO NOTHING",
                  list(DEFAULT_CONFIGS.keys()), list(DEFAULT_CONFIGS.values())
             )
+            # Garante Tesouro
             await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", self.ID_TESOURO_GUILDA)
-            print("Base de dados verificada (Estrutura Final v3.2 - Toggle Moedas).")
+            print("Base de dados verificada (Estrutura Final v3.2).")
         except Exception as e: print(f"❌ Erro CRÍTICO ao inicializar DB: {e}"); raise e
 
     @commands.command(name='initdb', hidden=True)
-    @commands.is_owner() # Apenas o dono do bot
+    @commands.is_owner()
     async def initdb(self, ctx):
-         await ctx.send("A forçar a verificação da base de dados...")
-         try:
-             await self.initialize_database_schema()
-             await ctx.send("✅ Verificação da base de dados concluída.")
-         except Exception as e:
-             await ctx.send(f"❌ Falha ao inicializar a base de dados: {e}")
+        await ctx.send("Forçando verificação da base de dados...")
+        try:
+            await self.initialize_database_schema(); await ctx.send("✅ Verificação concluída.")
+        except Exception as e: await ctx.send(f"❌ Falha: {e}")
 
     async def create_and_pin(self, ctx, *, category, name, embed, overwrites=None, set_config_key=None):
         try:
-            channel_overwrites = overwrites if overwrites is not None else {}
-            channel = await category.create_text_channel(name, overwrites=channel_overwrites)
+            channel = await category.create_text_channel(name, overwrites=overwrites or {})
             await asyncio.sleep(1.5)
             msg = await channel.send(embed=embed)
             await msg.pin()
-            
-            if set_config_key and channel:
+            if set_config_key:
                 await self.bot.db_manager.set_config_value(set_config_key, str(channel.id))
-                
             return channel
         except discord.Forbidden as e:
             await ctx.send(f"❌ Erro de permissão ao criar o canal `{name}`: {e}")
@@ -267,7 +249,7 @@ class Admin(commands.Cog):
     @definir_canal.command(name="aprovacao")
     async def definir_canal_aprovacao(self, ctx, canal: discord.TextChannel): await self._definir_canal_generico(ctx, "aprovacao", canal)
     @definir_canal.command(name="logtaxas")
-    async def definir_canal_logtaxas(self, ctx, canal: discord.TextChannel): await self._definir_canal_generico(ctx, "logtaxas", canal)
+    async def definir_canal_logtaxas(self, ctx, canal: discord.TextChannel): await self._definir_canal_generico(ctx, "log_taxas", canal)
     @definir_canal.command(name="resgates")
     async def definir_canal_resgates(self, ctx, canal: discord.TextChannel): await self._definir_canal_generico(ctx, "resgates", canal)
     @definir_canal.command(name="relatoriotaxas")
@@ -423,38 +405,39 @@ class Admin(commands.Cog):
     @commands.command(name="verificarconfig", aliases=["verconfig"], hidden=True)
     @check_permission_level(4)
     async def verificar_config(self, ctx):
-        await ctx.send("🔍 A gerar o relatório completo de configurações...")
-        canal_keys = sorted([k for k in DEFAULT_CONFIGS.keys() if k.startswith('canal_')])
-        msg_id_keys = sorted([k for k in DEFAULT_CONFIGS.keys() if k.startswith('taxa_msg_id_')])
+        await ctx.send("🔍 Gerando relatório completo de configurações...")
         configs = await self.bot.db_manager.execute_query("SELECT chave, valor FROM configuracoes ORDER BY chave ASC", fetch="all")
         configs_dict = {item['chave']: item['valor'] for item in configs}
 
         embed = discord.Embed(title="⚙️ Painel de Configuração Completo", color=discord.Color.orange())
-        # Adiciona a nova config à categoria Taxas
+        # Define as categorias e as chaves dentro delas
         categorias = {
-            "Canais": canal_keys,
+            "Canais Principais": ['canal_aprovacao', 'canal_mercado', 'canal_orbes', 'canal_anuncios', 'canal_resgates', 'canal_batepapo', 'canal_log_taxas'],
+            "Canais Eventos": ['canal_eventos', 'canal_planejamento'],
+            "Canais Taxas": ['canal_relatorio_taxas', 'canal_pagamento_taxas', 'canal_info_taxas'],
             "Cargos": ['cargo_membro', 'cargo_inadimplente', 'cargo_isento'],
             "Permissões": ['perm_nivel_1', 'perm_nivel_2', 'perm_nivel_3', 'perm_nivel_4'],
             "Economia": ['lastro_total_prata', 'taxa_conversao_prata'],
-            "Taxas": ['taxa_semanal_valor', 'taxa_dia_semana', 'taxa_dia_abertura', 'taxa_aceitar_moedas'], # <-- Adicionado aqui
+            "Taxas Config": ['taxa_semanal_valor', 'taxa_dia_semana', 'taxa_dia_abertura', 'taxa_aceitar_moedas'],
             "Mensagens Taxas": ['taxa_mensagem_inadimplente', 'taxa_mensagem_abertura', 'taxa_mensagem_reset'],
-            "IDs Mensagens Relatório Taxas": msg_id_keys,
+            "IDs Msgs Relatório Taxas": ['taxa_msg_id_pendentes', 'taxa_msg_id_pagos', 'taxa_msg_id_isentos_novos', 'taxa_msg_id_isentos_cargo'],
             "Renda Passiva": ['recompensa_voz', 'limite_voz', 'recompensa_chat', 'limite_chat', 'cooldown_chat', 'recompensa_reacao'],
         }
-        known_keys = {k for cat in categorias.values() for k in cat}
+        # Adiciona chaves não categorizadas, se houver
+        known_keys = {k for cat_keys in categorias.values() for k in cat_keys}
         other_keys = sorted([k for k in configs_dict if k not in known_keys])
-        if other_keys:
-            categorias["Outras Configurações"] = other_keys
+        if other_keys: categorias["Outras Configurações"] = other_keys
 
         for nome_cat, chaves in categorias.items():
             texto = ""
-            for chave in chaves:
+            for chave in chaves: # Itera sobre as chaves na ordem definida
                 valor = configs_dict.get(chave, "*Não Definido*")
+                # Formatação (copiada da versão anterior, deve estar correta)
                 if valor != "*Não Definido*":
                     try:
                         if 'canal' in chave and valor.isdigit() and valor != '0':
                              c = self.bot.get_channel(int(valor)) or await self.bot.fetch_channel(int(valor))
-                             valor = c.mention if c else f"⚠️ ID `{valor}` Inválido/Sem Acesso"
+                             valor = c.mention if c else f"⚠️ ID `{valor}` Inv/Acesso"
                         elif 'cargo' in chave and valor.isdigit() and valor != '0':
                              r = ctx.guild.get_role(int(valor))
                              valor = r.mention if r else f"⚠️ ID `{valor}` Inválido"
@@ -466,15 +449,22 @@ class Admin(commands.Cog):
                                      mencoes.append(r.mention if r else f"⚠️ ID `{rid_str}`")
                              valor = ", ".join(mencoes) if mencoes else "*Nenhum Cargo*"
                         elif '_msg_id_' in chave and valor == '0':
-                             valor = "*Nenhum*"
-                    except Exception:
-                        pass
+                            valor = "*Não criada*"
+                    except Exception as e: valor = f"⚠️ Erro ({valor}): {e}"
+
                 texto += f"**{chave}:** {valor}\n"
-            if texto: embed.add_field(name=f"--- {nome_cat} ---", value=texto, inline=False)
+
+            # Adiciona o campo ao embed se houver conteúdo
+            if texto:
+                # Limita o valor do campo a 1024 caracteres
+                if len(texto) > 1024:
+                    texto = texto[:1020] + "\n..."
+                embed.add_field(name=f"--- {nome_cat} ---", value=texto, inline=False)
+
         await ctx.send(embed=embed)
 
-    # ... (outros comandos admin inalterados)
 
-async def setup(bot):
-    await bot.add_cog(Admin(bot))
+    # ... (outros comandos admin inalterados) ...
+
+async def setup(bot): await bot.add_cog(Admin(bot))
 

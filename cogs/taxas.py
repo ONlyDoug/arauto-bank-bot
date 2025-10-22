@@ -390,7 +390,10 @@ class Taxas(commands.Cog):
             except:
                 pass
             canal_pagamento = self.bot.get_channel(canal_pagamento_id)
-            mention = f" no canal {canal_pagamento.mention}" if canal_pagamento else ""
+            if not canal_pagamento:
+                mention = ""
+            else:
+                mention = f" no canal {canal_pagamento.mention}"
             return await ctx.send(f"❌ {ctx.author.mention}, este comando só pode ser usado{mention}.", delete_after=15)
 
         # Verifica permissão do canal (mais robusto que verificar dia)
@@ -413,7 +416,7 @@ class Taxas(commands.Cog):
 
             economia = self.bot.get_cog('Economia')
             if not economia:
-                return await ctx.send("⚠️ Sistema económico indisponível. Tente mais tarde.")
+                return await ctx.send("⚠️ Sistema econômico indisponível. Tente mais tarde.")
 
             saldo_atual = await economia.get_saldo(ctx.author.id)
             if saldo_atual < valor_taxa:
