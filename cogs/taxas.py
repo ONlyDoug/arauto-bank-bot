@@ -8,12 +8,16 @@ from utils.views import TaxaPrataView
 
 # Função auxiliar
 def format_list_for_embed(member_data, limit=40):
-    if not member_data: return "Nenhum membro nesta categoria."
+    if not member_data:
+        return "Nenhum membro nesta categoria."
     display_data = member_data[:limit]
     text = "\n".join(display_data)
     remaining_count = len(member_data) - limit
-    if remaining_count > 0: text += f"\n... e mais {remaining_count} membros."
-    if len(text) > 4096: text = text[:4090] + "\n..."
+    if remaining_count > 0:
+        text += f"\n... e mais {remaining_count} membros."
+    # Proteção contra tamanho excessivo do campo do embed
+    if len(text) > 4000:
+        text = text[:3996] + "\n..."
     return text
 
 class Taxas(commands.Cog):
@@ -22,7 +26,7 @@ class Taxas(commands.Cog):
         self.ciclo_semanal_taxas.start()
         self.atualizar_relatorio_automatico.start()
         self.gerenciar_canal_e_anuncios_taxas.start()
-        print("Módulo de Taxas v3.1 (Final) pronto.")
+        print("Módulo de Taxas v3.2 (Final Completo) pronto.")
 
     def cog_unload(self):
         self.ciclo_semanal_taxas.cancel()
@@ -35,9 +39,11 @@ class Taxas(commands.Cog):
         try:
             configs = await self.bot.db_manager.get_all_configs(['cargo_membro'])
             cargo_membro_id = int(configs.get('cargo_membro', '0') or 0)
-            if cargo_membro_id == 0: return
+            if cargo_membro_id == 0:
+                return
             cargo_membro = after.guild.get_role(cargo_membro_id)
-            if not cargo_membro: return
+            if not cargo_membro:
+                return
             if cargo_membro not in before.roles and cargo_membro in after.roles:
                 await self.bot.db_manager.execute_query(
                     """INSERT INTO taxas (user_id, status_ciclo, data_entrada)
@@ -54,12 +60,17 @@ class Taxas(commands.Cog):
         try:
             cargo_inadimplente = membro.guild.get_role(int(configs.get('cargo_inadimplente', '0') or 0))
             cargo_membro = membro.guild.get_role(int(configs.get('cargo_membro', '0') or 0))
-            if not cargo_membro: return
+            if not cargo_membro:
+                return
             roles_to_add, roles_to_remove = [], []
-            if cargo_membro not in membro.roles: roles_to_add.append(cargo_membro)
-            if cargo_inadimplente and cargo_inadimplente in membro.roles: roles_to_remove.append(cargo_inadimplente)
-            if roles_to_add: await membro.add_roles(*roles_to_add, reason="Taxa regularizada")
-            if roles_to_remove: await membro.remove_roles(*roles_to_remove, reason="Taxa regularizada")
+            if cargo_membro not in membro.roles:
+                roles_to_add.append(cargo_membro)
+            if cargo_inadimplente and cargo_inadimplente in membro.roles:
+                roles_to_remove.append(cargo_inadimplente)
+            if roles_to_add:
+                await membro.add_roles(*roles_to_add, reason="Taxa regularizada")
+            if roles_to_remove:
+                await membro.remove_roles(*roles_to_remove, reason="Taxa regularizada")
         except discord.Forbidden:
             print(f"Erro de permissão ao regularizar {membro.name}")
         except Exception as e:
@@ -124,9 +135,11 @@ class Taxas(commands.Cog):
         # Relatório com 4 categorias (Pendentes, Pagos, Isentos Novos, Isentos Cargo)
         try:
             canal_id = int(await self.bot.db_manager.get_config_value('canal_relatorio_taxas', '0') or 0)
-            if canal_id == 0: return
+            if canal_id == 0:
+                return
             canal = self.bot.get_channel(canal_id)
-            if not canal: return
+            if not canal:
+                return
 
             # Busca membros com cargo isento primeiro
             cargo_isento_id = int(await self.bot.db_manager.get_config_value('cargo_isento', '0') or 0)
@@ -143,7 +156,7 @@ class Taxas(commands.Cog):
                 # Separa membros com cargo isento
                 if user_id in membros_cargo_isento_ids:
                     if (membro := canal.guild.get_member(user_id)):
-                         membros_isentos_cargo_report.append(f"{membro.mention} (`{membro.name}#{membro.discriminator}`)")
+                        membros_isentos_cargo_report.append(f"{membro.mention} (`{membro.name}#{membro.discriminator}`)")
                     continue
 
                 # Processa os restantes
@@ -155,7 +168,8 @@ class Taxas(commands.Cog):
                 status_map.setdefault(chave, [])
 
             # Ordena as listas
-            for status in status_map: status_map[status].sort(key=lambda x: x.split('(`')[1].lower() if '(`' in x else x)
+            for status in status_map:
+                status_map[status].sort(key=lambda x: x.split('(`')[1].lower() if '(`' in x else x)
             membros_isentos_cargo_report.sort(key=lambda x: x.split('(`')[1].lower() if '(`' in x else x)
 
             # Envia/Edita as 4 mensagens
@@ -176,11 +190,12 @@ class Taxas(commands.Cog):
             print(f"Erro crítico na task atualizar_relatorio_automatico: {e}")
 
     @atualizar_relatorio_automatico.before_loop
-    async def before_relatorio(self): await self.bot.wait_until_ready()
+    async def before_relatorio(self):
+        await self.bot.wait_until_ready()
 
+    # Tarefa de Gerenciamento com LIMPEZA
     @tasks.loop(time=time(hour=0, minute=1, tzinfo=datetime.now().astimezone().tzinfo))
     async def gerenciar_canal_e_anuncios_taxas(self):
-        # Gestão de abertura/fecho e LIMPEZA do canal
         try:
             configs = await self.bot.db_manager.get_all_configs([
                 'canal_pagamento_taxas', 'cargo_membro',
@@ -193,58 +208,50 @@ class Taxas(commands.Cog):
             dia_fechamento = (dia_reset + 1) % 7
 
             if canal_id == 0 or cargo_id == 0:
-                print("AVISO: Canal de pagamento ou cargo de membro não configurados para gestão de acesso.")
                 return
-
             canal = self.bot.get_channel(canal_id)
             if not canal:
-                print(f"AVISO: Canal {canal_id} não encontrado.")
                 return
-
-            guild = canal.guild
-            cargo = guild.get_role(cargo_id)
+            cargo = canal.guild.get_role(cargo_id)
             if not cargo:
-                print(f"AVISO: Cargo {cargo_id} não encontrado no servidor {guild.name}.")
                 return
 
             hoje = datetime.now().weekday()
             perms = canal.overwrites_for(cargo)
 
             if hoje == dia_abertura:
-                # Abre se não estiver aberto
-                if perms.send_messages is False or perms.send_messages is None:
+                if perms.send_messages is not True:
                     perms.send_messages = True
-                    await canal.set_permissions(cargo, overwrite=perms, reason="Abertura da janela de pagamento de taxa")
+                    await canal.set_permissions(cargo, overwrite=perms, reason="Abertura janela taxa")
                     msg_abertura = configs.get('taxa_mensagem_abertura', '')
                     if msg_abertura:
                         try:
                             await canal.send(msg_abertura)
                         except Exception as e:
                             print(f"Erro ao enviar mensagem de abertura: {e}")
-                    print(f"Canal {canal.name} ABERTO para pagamento de taxa.")
-
+                    print(f"Canal {canal.name} ABERTO para taxa.")
             elif hoje == dia_fechamento:
-                # Fecha e limpa se não estiver fechado
                 if perms.send_messages is not False:
                     perms.send_messages = False
-                    await canal.set_permissions(cargo, overwrite=perms, reason="Fechamento da janela de pagamento de taxa")
-                    print(f"Canal {canal.name} FECHADO para pagamento de taxa.")
-                    # LIMPEZA DO CANAL
+                    await canal.set_permissions(cargo, overwrite=perms, reason="Fechamento janela taxa")
+                    print(f"Canal {canal.name} FECHADO para taxa.")
+                    # Limpeza
                     try:
                         await canal.purge(limit=200, check=lambda msg: not msg.pinned)
-                        await canal.send("🧹 Mensagens anteriores limpas para organização.", delete_after=60)
-                        print(f"Canal {canal.name} limpo.")
+                        await self._enviar_instrucoes_pagamento(canal)  # Envia e fixa instruções
+                        print(f"Canal {canal.name} limpo e instruções enviadas.")
                     except discord.Forbidden:
-                        print(f"Sem permissão para limpar o canal {canal.name}.")
-                    except Exception as clean_e:
-                        print(f"Erro ao limpar canal {canal.name}: {clean_e}")
-
+                        print(f"Sem permissão para limpar {canal.name}.")
+                    except Exception as e:
+                        print(f"Erro ao limpar/instruir {canal.name}: {e}")
         except Exception as e:
             print(f"Erro na tarefa gerenciar_canal_e_anuncios_taxas: {e}")
 
     @gerenciar_canal_e_anuncios_taxas.before_loop
-    async def before_gerenciar_canal(self): await self.bot.wait_until_ready()
+    async def before_gerenciar_canal(self):
+        await self.bot.wait_until_ready()
 
+    # --- Ciclo Semanal e Execução ---
     @tasks.loop(time=time(hour=12, minute=0, tzinfo=datetime.now().astimezone().tzinfo))
     async def ciclo_semanal_taxas(self):
         dia_reset = int(await self.bot.db_manager.get_config_value('taxa_dia_semana', '6') or 6)
@@ -253,7 +260,7 @@ class Taxas(commands.Cog):
             await self.executar_ciclo_de_taxas(resetar_ciclo=True)
 
     async def executar_ciclo_de_taxas(self, ctx=None, resetar_ciclo: bool = False):
-        # Lógica principal com LOGS DETALHADOS
+        # Lógica principal com LOGS DETALHADOS (mantida das versões anteriores)
         guild = ctx.guild if ctx else (self.bot.guilds[0] if self.bot.guilds else None)
         if not guild:
             return print("ERRO: Bot não está em nenhum servidor.")
@@ -271,8 +278,10 @@ class Taxas(commands.Cog):
             canal_pagamento_id = int(configs.get('canal_pagamento_taxas', '0') or 0)
             msg_reset = configs.get('taxa_mensagem_reset', '')
             if canal_pagamento_id and msg_reset and (canal_pgto := self.bot.get_channel(canal_pagamento_id)):
-                try: await canal_pgto.send(msg_reset)
-                except Exception as e: print(f"Erro ao enviar msg reset: {e}")
+                try:
+                    await canal_pgto.send(msg_reset)
+                except Exception as e:
+                    print(f"Erro ao enviar msg reset: {e}")
 
         membros_pendentes_db = await self.bot.db_manager.execute_query("SELECT user_id, data_entrada FROM taxas WHERE status_ciclo = 'PENDENTE'", fetch="all")
         novos_isentos, inadimplentes, falhas, isentos_cargo = [], [], [], []
@@ -281,9 +290,11 @@ class Taxas(commands.Cog):
 
         for registro in membros_pendentes_db:
             membro = guild.get_member(registro.get('user_id'))
-            if not membro: continue
+            if not membro:
+                continue
             if cargo_isento and cargo_isento in membro.roles:
-                isentos_cargo.append(membro); continue
+                isentos_cargo.append(membro)
+                continue
             data_entrada = registro.get('data_entrada')
             if data_entrada and data_entrada > uma_semana_atras:
                 novos_isentos.append(membro)
@@ -294,9 +305,11 @@ class Taxas(commands.Cog):
                 inadimplente_role = guild.get_role(int(configs.get('cargo_inadimplente', '0') or 0))
                 needs_update = False
                 if membro_role and membro_role in membro.roles:
-                    await membro.remove_roles(membro_role, reason="Ciclo de taxa"); needs_update = True
+                    await membro.remove_roles(membro_role, reason="Ciclo de taxa")
+                    needs_update = True
                 if inadimplente_role and inadimplente_role not in membro.roles:
-                    await membro.add_roles(inadimplente_role, reason="Ciclo de taxa"); needs_update = True
+                    await membro.add_roles(inadimplente_role, reason="Ciclo de taxa")
+                    needs_update = True
                 if needs_update:
                     inadimplentes.append(membro)
                     if msg_inadimplente_template:
@@ -336,78 +349,119 @@ class Taxas(commands.Cog):
                 await ctx.send(embed=embed)
             except Exception as e:
                 print(f"Erro ao enviar embed para ctx: {e}")
-                try: await ctx.send("Erro ao gerar relatório detalhado.")
-                except: pass
+                try:
+                    await ctx.send("Erro ao gerar relatório detalhado.")
+                except:
+                    pass
 
         # Envia para canal de logs configurado
         if canal_log:
-            try: await canal_log.send(embed=embed)
-            except Exception as log_e: print(f"Erro ao enviar log detalhado: {log_e}")
+            try:
+                await canal_log.send(embed=embed)
+            except Exception as log_e:
+                print(f"Erro ao enviar log detalhado: {log_e}")
 
         log_msg = f"Ciclo de taxas executado. {len(inadimplentes)} inadimplentes, {len(novos_isentos)} novos isentos."
-        if resetar_ciclo: log_msg += f" {len(resetados_db)} status resetados."
+        if resetar_ciclo:
+            log_msg += f" {len(resetados_db)} status resetados."
         print(log_msg)
 
-    # --- Comandos do Utilizador com Verificação de Janela ---
+    # --- Comandos do Utilizador com Verificação de Permissão de Canal e Toggle ---
     @commands.command(name="pagar-taxa")
     async def pagar_taxa(self, ctx):
-        configs = await self.bot.db_manager.get_all_configs(['taxa_semanal_valor', 'taxa_dia_semana', 'taxa_dia_abertura', 'cargo_membro', 'cargo_inadimplente'])
-        valor_taxa = int(configs.get('taxa_semanal_valor', 0) or 0)
-        if valor_taxa == 0: return await ctx.send("ℹ️ Sistema de taxas desativado.")
+        configs = await self.bot.db_manager.get_all_configs([
+            'taxa_semanal_valor', 'taxa_aceitar_moedas',
+            'cargo_membro', 'cargo_inadimplente', 'canal_pagamento_taxas'
+        ])
 
-        status_db = await self.bot.db_manager.execute_query("SELECT status_ciclo FROM taxas WHERE user_id = $1", ctx.author.id, fetch="one")
-        status_atual = status_db['status_ciclo'] if status_db else 'PENDENTE'
-        if status_atual.startswith('PAGO'): return await ctx.send(f"✅ {ctx.author.mention}, você já pagou.", delete_after=20)
+        # Verifica se o comando está desativado
+        if configs.get('taxa_aceitar_moedas', 'true') == 'false':
+            try:
+                await ctx.message.delete()
+            except:
+                pass
+            return await ctx.send(f"⚠️ {ctx.author.mention}, o pagamento de taxas com moedas está temporariamente desativado pela administração.", delete_after=20)
 
-        hoje = datetime.now().weekday()
-        dia_abertura = int(configs.get('taxa_dia_abertura', '5') or 5)
-        dia_reset = int(configs.get('taxa_dia_semana', '6') or 6)
+        # Verifica se está no canal correto
+        canal_pagamento_id = int(configs.get('canal_pagamento_taxas', '0') or 0)
+        if canal_pagamento_id and ctx.channel.id != canal_pagamento_id:
+            try:
+                await ctx.message.delete()
+            except:
+                pass
+            canal_pagamento = self.bot.get_channel(canal_pagamento_id)
+            mention = f" no canal {canal_pagamento.mention}" if canal_pagamento else ""
+            return await ctx.send(f"❌ {ctx.author.mention}, este comando só pode ser usado{mention}.", delete_after=15)
 
-        inadimplente_role = ctx.guild.get_role(int(configs.get('cargo_inadimplente', '0') or 0))
-        esta_inadimplente = inadimplente_role and inadimplente_role in ctx.author.roles
+        # Verifica permissão do canal (mais robusto que verificar dia)
+        if not ctx.channel.permissions_for(ctx.author).send_messages:
+            inadimplente_role_id = int(configs.get('cargo_inadimplente', '0') or 0)
+            is_inadimplente = discord.utils.get(ctx.author.roles, id=inadimplente_role_id) if inadimplente_role_id else None
+            if not is_inadimplente:
+                try:
+                    await ctx.message.delete()
+                except:
+                    pass
+                return await ctx.send(f"⏳ {ctx.author.mention}, o canal de pagamento está fechado para pagamentos antecipados agora.", delete_after=20)
+            # Se for inadimplente, pode pagar mesmo com canal fechado para outros
 
-        janela_aberta = (hoje >= dia_abertura)
-
-        if not janela_aberta and not esta_inadimplente:
-            dias = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
-            try: await ctx.message.delete()
-            except: pass
-            return await ctx.send(f"⏳ {ctx.author.mention}, o canal de pagamento está fechado agora. A janela abre na **{dias[dia_abertura]}**.", delete_after=20)
-
+        # Continua com lógica de pagamento por moedas
         try:
+            valor_taxa = int(configs.get('taxa_semanal_valor', 0) or 0)
+            if valor_taxa == 0:
+                return await ctx.send("ℹ️ Sistema de taxas desativado.")
+
             economia = self.bot.get_cog('Economia')
+            if not economia:
+                return await ctx.send("⚠️ Sistema económico indisponível. Tente mais tarde.")
+
             saldo_atual = await economia.get_saldo(ctx.author.id)
             if saldo_atual < valor_taxa:
                 return await ctx.send(f"❌ {ctx.author.mention}, saldo insuficiente! Precisa de **{valor_taxa}** 🪙, possui **{saldo_atual}** 🪙.")
 
-            status_pagamento = 'PAGO_ANTECIPADO' if janela_aberta and not esta_inadimplente else 'PAGO_ATRASADO'
+            status_pagamento = 'PAGO_ANTECIPADO' if ctx.channel.permissions_for(ctx.author).send_messages else 'PAGO_ATRASADO'
             await economia.levantar(ctx.author.id, valor_taxa, f"Pagamento de taxa semanal ({status_pagamento})")
             await self.bot.db_manager.execute_query("INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET status_ciclo = $2", ctx.author.id, status_pagamento)
 
-            msg_sucesso = f"✅ Pagamento de **{valor_taxa}** 🪙 recebido, {ctx.author.mention}! Status: **{status_pagamento}**."
-            if esta_inadimplente:
-                await self.regularizar_membro(ctx.author, configs)
-                msg_sucesso += " Acesso restaurado!"
+            # Regulariza cargos se necessário
+            configs_local = configs
+            if discord.utils.get(ctx.author.roles, id=int(configs_local.get('cargo_inadimplente', '0') or 0)):
+                await self.regularizar_membro(ctx.author, configs_local)
+                msg_sucesso = f"✅ Pagamento de **{valor_taxa}** 🪙 recebido, {ctx.author.mention}! Status: **{status_pagamento}**. Acesso restaurado!"
+            else:
+                msg_sucesso = f"✅ Pagamento de **{valor_taxa}** 🪙 recebido, {ctx.author.mention}! Status: **{status_pagamento}**."
             await ctx.send(msg_sucesso)
         except Exception as e:
             await ctx.send(f"⚠️ Erro no pagamento: {e}")
 
     @commands.command(name="paguei-prata")
     async def paguei_prata(self, ctx):
-        configs = await self.bot.db_manager.get_all_configs(['taxa_dia_semana', 'taxa_dia_abertura', 'cargo_inadimplente'])
+        configs = await self.bot.db_manager.get_all_configs(['cargo_inadimplente', 'canal_pagamento_taxas'])
         hoje = datetime.now().weekday()
-        dia_abertura = int(configs.get('taxa_dia_abertura', '5') or 5)
-        dia_reset = int(configs.get('taxa_dia_semana', '6') or 6)
-        inadimplente_role = ctx.guild.get_role(int(configs.get('cargo_inadimplente', '0') or 0))
-        esta_inadimplente = inadimplente_role and inadimplente_role in ctx.author.roles
-        janela_aberta = (hoje >= dia_abertura)
+        canal_pagamento_id = int(configs.get('canal_pagamento_taxas', '0') or 0)
 
-        if not janela_aberta and not esta_inadimplente:
-            dias = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
-            try: await ctx.message.delete()
-            except: pass
-            return await ctx.send(f"⏳ {ctx.author.mention}, o canal está fechado para envio de comprovativos agora. A janela abre na **{dias[dia_abertura]}**.", delete_after=20)
+        # Verifica se está no canal correto
+        if canal_pagamento_id and ctx.channel.id != canal_pagamento_id:
+            try:
+                await ctx.message.delete()
+            except:
+                pass
+            canal_pagamento = self.bot.get_channel(canal_pagamento_id)
+            mention = f" no canal {canal_pagamento.mention}" if canal_pagamento else ""
+            return await ctx.send(f"❌ {ctx.author.mention}, este comando só pode ser usado{mention}.", delete_after=15)
 
+        # Verifica permissão do canal
+        if not ctx.channel.permissions_for(ctx.author).send_messages:
+            inadimplente_role_id = int(configs.get('cargo_inadimplente', '0') or 0)
+            is_inadimplente = discord.utils.get(ctx.author.roles, id=inadimplente_role_id) if inadimplente_role_id else None
+            if not is_inadimplente:
+                try:
+                    await ctx.message.delete()
+                except:
+                    pass
+                return await ctx.send(f"⏳ {ctx.author.mention}, o canal está fechado para envio de comprovativos agora.", delete_after=20)
+
+        # Valida anexo e cria submissão (restante lógica inalterada)
         if not ctx.message.attachments:
             return await ctx.send(f"❌ {ctx.author.mention}, anexe o print do comprovativo na mesma mensagem do comando `!paguei-prata`.", delete_after=20)
 
@@ -440,7 +494,7 @@ class Taxas(commands.Cog):
             print(f"Erro ao enviar submissão de prata: {e}")
             await ctx.send("❌ Falha ao enviar o comprovativo. Tente novamente ou contacte a staff.", delete_after=20)
 
-    # --- Comandos Admin (inalterados, chamadas para funções implementadas acima) ---
+    # --- Comandos Admin e Gestão Manual (mantidos/incluídos) ---
     @commands.command(name="forcar-taxa", hidden=True)
     @check_permission_level(4)
     async def forcar_taxa(self, ctx):
@@ -473,7 +527,8 @@ class Taxas(commands.Cog):
         corrigidos, ja_regulares = [], []
         for user_id in todos_pagadores_ids:
             membro = ctx.guild.get_member(user_id)
-            if not membro: continue
+            if not membro:
+                continue
 
             await self.bot.db_manager.execute_query(
                 "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, 'PAGO_ATRASADO') ON CONFLICT (user_id) DO UPDATE SET status_ciclo = 'PAGO_ATRASADO'",
@@ -488,7 +543,8 @@ class Taxas(commands.Cog):
                 ja_regulares.append(membro.mention)
 
         def format_report_list(mentions):
-            if not mentions: return "Nenhum"
+            if not mentions:
+                return "Nenhum"
             text = "\n".join(mentions)
             if len(text) > 1024:
                 truncated_text = text[:1000]
@@ -508,43 +564,164 @@ class Taxas(commands.Cog):
         await ctx.send(embed=embed)
 
     @commands.group(name="taxamanual", invoke_without_command=True, hidden=True)
-    @check_permission_level(2)
+    @check_permission_level(3)
     async def taxa_manual(self, ctx):
-         await ctx.send("Use `!taxamanual pago <@membro>` ou `!taxamanual isento <@membro>`.")
+        await ctx.send("Use `!taxamanual <status> <@membro>`. Status: `pago`, `isento`, `removerpago`, `removerisento`.")
+
+    async def _log_manual_action(self, ctx, membro, acao):
+        canal_log = self.bot.get_channel(int(await self.bot.db_manager.get_config_value('canal_log_taxas', '0') or 0))
+        if canal_log:
+            await canal_log.send(f"ℹ️ **Ação Manual:** {ctx.author.mention} definiu o status de {membro.mention} como **{acao}**.")
 
     @taxa_manual.command(name="pago")
     async def taxa_manual_pago(self, ctx, membro: discord.Member):
         try:
             configs = await self.bot.db_manager.get_all_configs(['cargo_inadimplente', 'cargo_membro'])
-            await self.bot.db_manager.execute_query(
-                "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, 'PAGO_MANUAL') ON CONFLICT (user_id) DO UPDATE SET status_ciclo = 'PAGO_MANUAL'",
-                membro.id
-            )
+            await self.bot.db_manager.execute_query("INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, 'PAGO_MANUAL') ON CONFLICT (user_id) DO UPDATE SET status_ciclo = 'PAGO_MANUAL'", membro.id)
             await self.regularizar_membro(membro, configs)
-            await ctx.send(f"✅ {membro.mention} foi marcado manualmente como **PAGO** para este ciclo.")
-            canal_log = self.bot.get_channel(int(await self.bot.db_manager.get_config_value('canal_log_taxas', '0') or 0))
-            if canal_log:
-                await canal_log.send(f"ℹ️ {ctx.author.mention} marcou {membro.mention} como **PAGO** manualmente.")
+            await ctx.send(f"✅ {membro.mention} marcado como **PAGO** manualmente.")
+            await self._log_manual_action(ctx, membro, "PAGO_MANUAL")
         except Exception as e:
-            await ctx.send(f"❌ Erro ao marcar como pago: {e}")
+            await ctx.send(f"❌ Erro: {e}")
 
     @taxa_manual.command(name="isento")
     async def taxa_manual_isento(self, ctx, membro: discord.Member):
         try:
             configs = await self.bot.db_manager.get_all_configs(['cargo_inadimplente', 'cargo_membro'])
-            await self.bot.db_manager.execute_query(
-                "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, 'ISENTO_MANUAL') ON CONFLICT (user_id) DO UPDATE SET status_ciclo = 'ISENTO_MANUAL'",
-                membro.id
-            )
+            await self.bot.db_manager.execute_query("INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, 'ISENTO_MANUAL') ON CONFLICT (user_id) DO UPDATE SET status_ciclo = 'ISENTO_MANUAL'", membro.id)
             await self.regularizar_membro(membro, configs)
-            await ctx.send(f"✅ {membro.mention} foi marcado manualmente como **ISENTO** para este ciclo.")
-            canal_log = self.bot.get_channel(int(await self.bot.db_manager.get_config_value('canal_log_taxas', '0') or 0))
-            if canal_log:
-                await canal_log.send(f"ℹ️ {ctx.author.mention} marcou {membro.mention} como **ISENTO** manualmente.")
+            await ctx.send(f"✅ {membro.mention} marcado como **ISENTO** manualmente.")
+            await self._log_manual_action(ctx, membro, "ISENTO_MANUAL")
         except Exception as e:
-            await ctx.send(f"❌ Erro ao marcar como isento: {e}")
+            await ctx.send(f"❌ Erro: {e}")
 
-    # ... (outros comandos admin mantidos) ...
+    @taxa_manual.command(name="removerpago")
+    async def taxa_manual_remover_pago(self, ctx, membro: discord.Member):
+        try:
+            await self.bot.db_manager.execute_query("UPDATE taxas SET status_ciclo = 'PENDENTE' WHERE user_id = $1 AND status_ciclo LIKE 'PAGO_%'", membro.id)
+            await ctx.send(f"✅ Status PAGO removido de {membro.mention}. Status atual: **PENDENTE**.")
+            await self._log_manual_action(ctx, membro, "PENDENTE (Remoção de PAGO)")
+        except Exception as e:
+            await ctx.send(f"❌ Erro: {e}")
+
+    @taxa_manual.command(name="removerisento")
+    async def taxa_manual_remover_isento(self, ctx, membro: discord.Member):
+        try:
+            await self.bot.db_manager.execute_query("UPDATE taxas SET status_ciclo = 'PENDENTE' WHERE user_id = $1 AND status_ciclo LIKE 'ISENTO_%'", membro.id)
+            await ctx.send(f"✅ Status ISENTO removido de {membro.mention}. Status atual: **PENDENTE**.")
+            await self._log_manual_action(ctx, membro, "PENDENTE (Remoção de ISENTO)")
+        except Exception as e:
+            await ctx.send(f"❌ Erro: {e}")
+
+    # --- NOVOS COMANDOS DE CONTROLO MANUAL DO CANAL ---
+    async def _controlar_canal_pagamento(self, ctx, abrir: bool):
+        configs = await self.bot.db_manager.get_all_configs(['canal_pagamento_taxas', 'cargo_membro'])
+        canal_id = int(configs.get('canal_pagamento_taxas', '0') or 0)
+        cargo_id = int(configs.get('cargo_membro', '0') or 0)
+        if not canal_id or not cargo_id:
+            return await ctx.send("❌ Canal de pagamento ou cargo membro não configurados.")
+        canal = self.bot.get_channel(canal_id)
+        cargo = ctx.guild.get_role(cargo_id)
+        if not canal or not cargo:
+            return await ctx.send("❌ Canal ou cargo não encontrados.")
+
+        try:
+            perms = canal.overwrites_for(cargo)
+            perms.send_messages = abrir
+            await canal.set_permissions(cargo, overwrite=perms, reason=f"Controlo manual por {ctx.author.name}")
+            status = "ABERTO" if abrir else "FECHADO"
+            await ctx.send(f"✅ Canal {canal.mention} foi **{status}** para {cargo.mention}.")
+        except discord.Forbidden:
+            await ctx.send("❌ Sem permissão para alterar as permissões do canal.")
+        except Exception as e:
+            await ctx.send(f"❌ Erro ao controlar canal: {e}")
+
+    @commands.command(name="abrircanalpagamento", hidden=True)
+    @check_permission_level(4)
+    async def abrir_canal_pagamento(self, ctx):
+        await self._controlar_canal_pagamento(ctx, abrir=True)
+
+    @commands.command(name="fecharcanalpagamento", hidden=True)
+    @check_permission_level(4)
+    async def fechar_canal_pagamento(self, ctx):
+        await self._controlar_canal_pagamento(ctx, abrir=False)
+
+    # --- COMANDO DE LIMPEZA MANUAL E INSTRUÇÕES ---
+    async def _enviar_instrucoes_pagamento(self, canal: discord.TextChannel):
+        embed = discord.Embed(
+            title="🪙 Instruções para Pagamento da Taxa Semanal",
+            description="Leia atentamente como regularizar a sua situação.",
+            color=discord.Color.gold()
+        )
+        embed.add_field(
+            name="Opção 1: Pagar com Moedas (GC 🪙)",
+            value=f"- Use o comando `!pagar-taxa` neste canal.\n"
+                  f"- O valor será debitado automaticamente do seu saldo.\n"
+                  f"- Seu acesso é restaurado **imediatamente**.",
+            inline=False
+        )
+        embed.add_field(
+            name="Opção 2: Pagar com Prata (🥈)",
+            value=f"- Faça o pagamento da taxa em prata no jogo para a conta da guilda.\n"
+                  f"- Tire um print **completo** da tela do jogo mostrando:\n"
+                  f"  - A confirmação do envio da prata.\n"
+                  f"  - **A data e hora do seu computador visíveis**.\n"
+                  f"- Use o comando `!paguei-prata` **anexando o print na mesma mensagem**.\n"
+                  f"- Aguarde a **aprovação manual** da staff. Seu acesso só será restaurado após a aprovação.",
+            inline=False
+        )
+        embed.add_field(
+            name="⚠️ Atenção ⚠️",
+            value="- O canal só fica aberto para pagamento durante a janela definida.\n"
+                  "- Membros com o cargo 'Inadimplente' podem pagar a qualquer momento.\n"
+                  "- Novos membros são isentos da primeira taxa.",
+            inline=False
+        )
+        embed.set_footer(text="Mantenha sua taxa em dia e contribua com a guilda!")
+
+        try:
+            # Apaga mensagens antigas de instruções (se houver)
+            async for msg in canal.history(limit=10):
+                if msg.pinned and msg.author == self.bot.user and msg.embeds and msg.embeds[0].title.startswith("🪙 Instruções"):
+                    try:
+                        await msg.unpin()
+                        await msg.delete()
+                    except Exception:
+                        pass
+
+            # Envia e fixa a nova
+            msg_instrucoes = await canal.send(embed=embed)
+            try:
+                await msg_instrucoes.pin()
+            except Exception:
+                pass
+        except discord.Forbidden:
+            print(f"Sem permissão para fixar/apagar mensagens em {canal.name}")
+        except Exception as e:
+            print(f"Erro ao enviar/fixar instruções em {canal.name}: {e}")
+
+    @commands.command(name="limparcanalpagamento", hidden=True)
+    @check_permission_level(4)
+    async def limpar_canal_pagamento(self, ctx):
+        configs = await self.bot.db_manager.get_all_configs(['canal_pagamento_taxas'])
+        canal_id = int(configs.get('canal_pagamento_taxas', '0') or 0)
+        if not canal_id:
+            return await ctx.send("❌ Canal de pagamento não configurado.")
+        canal = self.bot.get_channel(canal_id)
+        if not canal:
+            return await ctx.send("❌ Canal de pagamento não encontrado.")
+
+        try:
+            await ctx.send(f"🧹 A limpar mensagens antigas em {canal.mention}...")
+            deleted = await canal.purge(limit=200, check=lambda msg: not msg.pinned)
+            await self._enviar_instrucoes_pagamento(canal)
+            await ctx.send(f"✅ Canal limpo ({len(deleted)} mensagens removidas) e instruções atualizadas/fixadas.")
+        except discord.Forbidden:
+            await ctx.send("❌ Sem permissão para apagar mensagens neste canal.")
+        except Exception as e:
+            await ctx.send(f"❌ Erro ao limpar canal: {e}")
+
+    # ... (outros comandos admin: definir-taxa, dias, etc. mantidos) ...
 
 async def setup(bot):
     await bot.add_cog(Taxas(bot))

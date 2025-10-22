@@ -5,10 +5,11 @@ from datetime import datetime
 from utils.permissions import check_permission_level
 from collections import defaultdict
 
-# Dicionário de Configurações Padrão (movido para o topo para reutilização)
+# Dicionário de Configurações Padrão
 DEFAULT_CONFIGS = {
     'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
     'taxa_semanal_valor': '500', 'taxa_dia_semana': '6', 'taxa_dia_abertura': '5',
+    'taxa_aceitar_moedas': 'true', # <-- NOVA CONFIG (true/false)
     'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
     'perm_nivel_1': '', 'perm_nivel_2': '', 'perm_nivel_3': '', 'perm_nivel_4': '',
     'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
@@ -16,11 +17,10 @@ DEFAULT_CONFIGS = {
     'canal_eventos': '0', 'canal_planejamento': '0',
     'canal_relatorio_taxas': '0', 'canal_pagamento_taxas': '0', 'canal_info_taxas': '0',
     'taxa_msg_id_pendentes': '0', 'taxa_msg_id_pagos': '0',
-    'taxa_msg_id_isentos_novos': '0', # Renomeado de taxa_msg_id_isentos
-    'taxa_msg_id_isentos_cargo': '0', # NOVO para isentos por cargo
-    'taxa_mensagem_inadimplente': 'Olá {member}! A taxa semanal de {tax_value} moedas não foi paga. O seu acesso foi temporariamente restringido. Use `!pagar-taxa` ou `!paguei-prata` para regularizar.',
-    'taxa_mensagem_abertura': '✅ A janela para pagamento da taxa semanal está **ABERTA**! Use `!pagar-taxa` ou `!paguei-prata` até Domingo.',
-    'taxa_mensagem_reset': '⚠️ Hoje é o dia do reset das taxas! Último dia para pagamento.',
+    'taxa_msg_id_isentos_novos': '0', 'taxa_msg_id_isentos_cargo': '0',
+    'taxa_mensagem_inadimplente': 'Olá {member}! A taxa semanal de {tax_value} moedas não foi paga...',
+    'taxa_mensagem_abertura': '✅ Janela de pagamento ABERTA! Use `!pagar-taxa` ou `!paguei-prata`.',
+    'taxa_mensagem_reset': '⚠️ Hoje é o último dia para pagar a taxa!',
     'recompensa_voz': '1', 'limite_voz': '120', 'recompensa_chat': '1', 'limite_chat': '100', 'cooldown_chat': '60', 'recompensa_reacao': '50',
 }
 
@@ -73,14 +73,9 @@ class Admin(commands.Cog):
                  "INSERT INTO configuracoes (chave, valor) SELECT * FROM UNNEST($1::TEXT[], $2::TEXT[]) ON CONFLICT (chave) DO NOTHING",
                  list(DEFAULT_CONFIGS.keys()), list(DEFAULT_CONFIGS.values())
             )
-
-            # Garante a existência do tesouro
             await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", self.ID_TESOURO_GUILDA)
-
-            print("Base de dados verificada (Estrutura Final v3.1 - Relatório 4 Msgs).")
-        except Exception as e:
-            print(f"❌ Erro CRÍTICO ao inicializar DB: {e}")
-            raise e
+            print("Base de dados verificada (Estrutura Final v3.2 - Toggle Moedas).")
+        except Exception as e: print(f"❌ Erro CRÍTICO ao inicializar DB: {e}"); raise e
 
     @commands.command(name='initdb', hidden=True)
     @commands.is_owner() # Apenas o dono do bot
@@ -429,24 +424,23 @@ class Admin(commands.Cog):
     @check_permission_level(4)
     async def verificar_config(self, ctx):
         await ctx.send("🔍 A gerar o relatório completo de configurações...")
-        # Adiciona todas as chaves de canal à lista
         canal_keys = sorted([k for k in DEFAULT_CONFIGS.keys() if k.startswith('canal_')])
         msg_id_keys = sorted([k for k in DEFAULT_CONFIGS.keys() if k.startswith('taxa_msg_id_')])
         configs = await self.bot.db_manager.execute_query("SELECT chave, valor FROM configuracoes ORDER BY chave ASC", fetch="all")
         configs_dict = {item['chave']: item['valor'] for item in configs}
 
         embed = discord.Embed(title="⚙️ Painel de Configuração Completo", color=discord.Color.orange())
+        # Adiciona a nova config à categoria Taxas
         categorias = {
             "Canais": canal_keys,
             "Cargos": ['cargo_membro', 'cargo_inadimplente', 'cargo_isento'],
             "Permissões": ['perm_nivel_1', 'perm_nivel_2', 'perm_nivel_3', 'perm_nivel_4'],
             "Economia": ['lastro_total_prata', 'taxa_conversao_prata'],
-            "Taxas": ['taxa_semanal_valor', 'taxa_dia_semana', 'taxa_dia_abertura'],
+            "Taxas": ['taxa_semanal_valor', 'taxa_dia_semana', 'taxa_dia_abertura', 'taxa_aceitar_moedas'], # <-- Adicionado aqui
             "Mensagens Taxas": ['taxa_mensagem_inadimplente', 'taxa_mensagem_abertura', 'taxa_mensagem_reset'],
             "IDs Mensagens Relatório Taxas": msg_id_keys,
             "Renda Passiva": ['recompensa_voz', 'limite_voz', 'recompensa_chat', 'limite_chat', 'cooldown_chat', 'recompensa_reacao'],
         }
-        # Adiciona chaves não categorizadas (se houver alguma nova/esquecida)
         known_keys = {k for cat in categorias.values() for k in cat}
         other_keys = sorted([k for k in configs_dict if k not in known_keys])
         if other_keys:
@@ -476,8 +470,7 @@ class Admin(commands.Cog):
                     except Exception:
                         pass
                 texto += f"**{chave}:** {valor}\n"
-            if texto:
-                embed.add_field(name=f"--- {nome_cat} ---", value=texto, inline=False)
+            if texto: embed.add_field(name=f"--- {nome_cat} ---", value=texto, inline=False)
         await ctx.send(embed=embed)
 
     # ... (outros comandos admin inalterados)
