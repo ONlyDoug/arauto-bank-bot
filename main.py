@@ -89,54 +89,85 @@ class ArautoBankBot(commands.Bot):
         print(f'Login bem-sucedido como {self.user.name} (ID: {self.user.id})')
         print('------')
 
+    # --- FUNÇÃO on_command_error ATUALIZADA ---
     async def on_command_error(self, ctx, error):
         if isinstance(error, commands.CheckFailure):
+            # Ignora erros de permissão tratados localmente ou pelo check global
             return
+            
+        # Não processa erros em DMs ou de comandos desconhecidos sem prefixo claro
+        if not ctx.guild or not ctx.command:
+             # Trata CommandNotFound especificamente mesmo sem ctx.command
+             if isinstance(error, commands.CommandNotFound) and ctx.invoked_with:
+                 try: await ctx.message.delete()
+                 except: pass # Ignora se não conseguir apagar
 
-        # --- SISTEMA DE SUPORTE AUTOMÁTICO (COMPORTAMENTO FINAL) ---
+                 comando_errado = ctx.invoked_with
+                 comandos_validos = [cmd.name for cmd in self.commands if not cmd.hidden] + [alias for cmd in self.commands if not cmd.hidden for alias in cmd.aliases]
+                 sugestoes = difflib.get_close_matches(comando_errado, comandos_validos, n=1, cutoff=0.7)
+
+                 if sugestoes:
+                     await ctx.send(
+                         f"🤔 {ctx.author.mention}, o comando `!{comando_errado}` não existe. Você quis dizer `!{sugestoes[0]}`? "
+                         f"Use `!ajuda {sugestoes[0]}` para detalhes.",
+                         delete_after=30
+                     )
+                 else:
+                     await ctx.send(
+                         f"😕 {ctx.author.mention}, não reconheço o comando `!{comando_errado}`. "
+                         f"Verifique a ortografia ou consulte a lista completa com `!ajuda`.",
+                         delete_after=30
+                     )
+             return # Ignora outros erros se não houver comando válido
+
+        try: await ctx.message.delete()
+        except: pass # Tenta apagar a mensagem original
 
         if isinstance(error, commands.CommandNotFound):
-            await ctx.message.delete()  # Apaga a mensagem do jogador
-            
-            comando_errado = ctx.invoked_with
-            comandos_validos = [cmd.name for cmd in self.commands if not cmd.hidden]
-            sugestoes = difflib.get_close_matches(comando_errado, comandos_validos, n=1, cutoff=0.7)
-            
-            if sugestoes:
-                await ctx.send(
-                    f"Burp... A sério, {ctx.author.mention}? `!{comando_errado}` não faz sentido... "
-                    f"O meu scanner sugere que talvez quisesses dizer **`!{sugestoes[0]}`**. Tenta lá isso.",
-                    delete_after=60 # A mensagem do bot desaparece após 1 minuto
-                )
-            else:
-                await ctx.send(
-                    f"Ora bolas, {ctx.author.mention}. `!{comando_errado}`? Isso não é um comando. "
-                    f"Pede o manual de instruções com `!ajuda` antes que eu perca a paciência.",
-                    delete_after=60 # A mensagem do bot desaparece após 1 minuto
-                )
-            return
+            # Este bloco agora só é alcançado se ctx.command for None, o que é raro
+            # A lógica principal está acima
+             pass
 
-        if isinstance(error, commands.MissingRequiredArgument):
-            await ctx.message.delete()  # Apaga a mensagem do jogador
+        elif isinstance(error, commands.MissingRequiredArgument):
             parametro_em_falta = error.param.name
             await ctx.send(
-                f"Oh, geez, {ctx.author.mention}... `!{ctx.command.name}`. E depois? "
-                f"Falta aí o **`{parametro_em_falta}`**. "
-                f"Completa o comando ou usa `!ajuda {ctx.command.name}`.",
-                delete_after=60 # A mensagem do bot desaparece após 1 minuto
+                f"⚠️ {ctx.author.mention}, faltou um argumento para o comando `!{ctx.command.name}`!\n"
+                f"Precisa de fornecer: **`{parametro_em_falta}`**.\n"
+                f"Use `!ajuda {ctx.command.name}` para ver a sintaxe correta e exemplos.",
+                delete_after=45
             )
-            return
 
-        if isinstance(error, commands.BadArgument):
-            await ctx.message.delete()  # Apaga a mensagem do jogador
-            await ctx.send(
-                f"Que diabo, {ctx.author.mention}! Os argumentos que deste para `!{ctx.command.name}` são do tipo errado. "
-                f"Lê as instruções em `!ajuda {ctx.command.name}` antes que eu transforme as tuas moedas em pó cósmico.",
-                delete_after=60 # A mensagem do bot desaparece após 1 minuto
-            )
-            return
+        elif isinstance(error, commands.BadArgument):
+             # Tenta obter o tipo esperado se disponível
+             expected_type = ""
+             if hasattr(error, 'param') and hasattr(error.param.annotation, '__name__'):
+                 expected_type = f" (esperava um {error.param.annotation.__name__})"
+             
+             await ctx.send(
+                 f"❌ {ctx.author.mention}, o tipo de argumento fornecido para `!{ctx.command.name}` está incorreto{expected_type}.\n"
+                 f"Por favor, verifique os dados inseridos. Use `!ajuda {ctx.command.name}` para exemplos.",
+                 delete_after=45
+             )
 
-        print(f"Erro inesperado no comando '{ctx.command}': {error}")
+        elif isinstance(error, commands.CommandInvokeError):
+             # Erros que acontecem DENTRO da lógica do comando
+             original = error.original
+             print(f"Erro ao invocar comando '{ctx.command.qualified_name}': {original}") # Log detalhado para o admin
+             await ctx.send(
+                 f"🤯 {ctx.author.mention}, ocorreu um erro inesperado ao executar o comando `!{ctx.command.name}`. "
+                 f"A equipe de administração já foi (ou deveria ser) notificada. Se o problema persistir, contacte a staff.\n"
+                 f"`Erro: {original}`", # Mostra o erro original ao user para facilitar reporte
+                 delete_after=60
+             )
+
+        else:
+             # Outros erros genéricos da biblioteca
+             print(f"Erro inesperado não tratado para o comando '{ctx.command.qualified_name}': {error}")
+             await ctx.send(
+                 f"🤔 {ctx.author.mention}, algo correu mal com o comando `!{ctx.command.name}`. "
+                 f"Erro: `{error}`",
+                 delete_after=60
+             )
 
 # --- Iniciar o Bot ---
 if __name__ == "__main__":
