@@ -9,7 +9,7 @@ from collections import defaultdict
 DEFAULT_CONFIGS = {
     'lastro_total_prata': '0', 'taxa_conversao_prata': '1000',
     'taxa_semanal_valor': '500', 'taxa_dia_semana': '6', 'taxa_dia_abertura': '5',
-    'taxa_aceitar_moedas': 'true', # Toggle para !pagar-taxa
+    'taxa_aceitar_moedas': 'true',
     'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
     'perm_nivel_1': '', 'perm_nivel_2': '', 'perm_nivel_3': '', 'perm_nivel_4': '',
     'canal_aprovacao': '0', 'canal_mercado': '0', 'canal_orbes': '0', 'canal_anuncios': '0',
@@ -61,7 +61,7 @@ class Admin(commands.Cog):
             )
             # Garante Tesouro
             await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", self.ID_TESOURO_GUILDA)
-            print("Base de dados verificada (Estrutura Final v3.2).")
+            print("Base de dados verificada (Estrutura Final v3.2 - Limpa).")
         except Exception as e: print(f"❌ Erro CRÍTICO ao inicializar DB: {e}"); raise e
 
     @commands.command(name='initdb', hidden=True)
@@ -281,63 +281,82 @@ class Admin(commands.Cog):
         await self.bot.db_manager.set_config_value("taxa_mensagem_reset", mensagem)
         await ctx.send(f"✅ Mensagem do dia de reset definida!\n**Preview:**\n{mensagem}")
 
-    # --- Outros comandos de admin (inalterados) ---
-    @commands.command(name="anunciar")
-    @check_permission_level(3)
-    async def anunciar(self, ctx, tipo_canal: str, *, mensagem: str):
-        tipos_validos = { "mercado": "canal_mercado", "batepapo": "canal_batepapo" }
-        if tipo_canal.lower() not in tipos_validos:
-            return await ctx.send("❌ Tipo de canal inválido. Use `mercado` ou `batepapo`.")
-        
-        chave_canal = tipos_validos[tipo_canal.lower()]
-        canal_id_str = await self.bot.db_manager.get_config_value(chave_canal)
-        if not canal_id_str or canal_id_str == '0':
-            return await ctx.send(f"⚠️ O canal `{tipo_canal}` ainda não foi configurado.")
-        canal = self.bot.get_channel(int(canal_id_str))
-        if not canal:
-            return await ctx.send("❌ Canal não encontrado.")
-        embed = discord.Embed(title="📢 Anúncio da Administração", description=mensagem, color=discord.Color.blue(), timestamp=datetime.utcnow())
-        embed.set_footer(text=f"Anunciado por: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
+    # --- Grupo !configtaxa (SEM DEBUG) ---
+    @commands.group(name="configtaxa", invoke_without_command=True, hidden=True)
+    @check_permission_level(4)
+    async def config_taxa(self, ctx): await ctx.send("Use `!configtaxa moedas <on|off>`.")
+
+    @config_taxa.command(name="moedas")
+    async def config_taxa_moedas(self, ctx, estado: str):
+        valor_bool = 'true' if estado.lower() == 'on' else 'false'
         try:
-            await canal.send(embed=embed)
-            await ctx.send("✅ Anúncio enviado!", delete_after=10)
-        except discord.Forbidden:
-            await ctx.send("❌ O bot não tem permissão para enviar mensagens nesse canal.")
-
-    @commands.command(name="definir-lastro")
+            await self.bot.db_manager.set_config_value('taxa_aceitar_moedas', valor_bool)
+            await ctx.send(f"✅ Pagamento com moedas (`!pagar-taxa`) **{'ATIVADO' if valor_bool == 'true' else 'DESATIVADO'}**.")
+        except Exception as e:
+            await ctx.send(f"❌ Erro ao tentar definir a configuração: {e}")
+    
+    # --- Comando !verificarconfig (inalterado) ---
+    @commands.command(name="verificarconfig", aliases=["verconfig"], hidden=True)
     @check_permission_level(4)
-    async def definir_lastro(self, ctx, valor: int):
-        if valor < 0:
-            return await ctx.send("❌ O valor do lastro não pode ser negativo.")
-        await self.bot.db_manager.set_config_value('lastro_total_prata', str(valor))
-        taxa_conversao = int(await self.bot.db_manager.get_config_value('taxa_conversao_prata', '1000'))
-        suprimento_maximo = valor // taxa_conversao if taxa_conversao > 0 else 0
-        await self.bot.db_manager.execute_query("UPDATE banco SET saldo = $1 WHERE user_id = $2", suprimento_maximo, self.ID_TESOURO_GUILDA)
-        await ctx.send(f"✅ Lastro total de prata definido para **{valor:,}** 🥈. O tesouro foi atualizado para **{suprimento_maximo:,}** 🪙.".replace(',', '.'))
+    async def verificar_config(self, ctx):
+        await ctx.send("🔍 Gerando relatório completo de configurações...")
+        configs = await self.bot.db_manager.execute_query("SELECT chave, valor FROM configuracoes ORDER BY chave ASC", fetch="all")
+        configs_dict = {item['chave']: item['valor'] for item in configs}
 
-    @commands.command(name="definir-taxa-conversao")
-    @check_permission_level(4)
-    async def definir_taxa_conversao(self, ctx, valor: int):
-        if valor <= 0:
-            return await ctx.send("❌ A taxa de conversão deve ser um valor positivo.")
-        await self.bot.db_manager.set_config_value('taxa_conversao_prata', str(valor))
-        await ctx.send(f"✅ Taxa de conversão definida para **1 🪙 = {valor:,} 🥈**.".replace(',', '.'))
+        embed = discord.Embed(title="⚙️ Painel de Configuração Completo", color=discord.Color.orange())
+        # Define as categorias e as chaves dentro delas
+        categorias = {
+            "Canais Principais": ['canal_aprovacao', 'canal_mercado', 'canal_orbes', 'canal_anuncios', 'canal_resgates', 'canal_batepapo', 'canal_log_taxas'],
+            "Canais Eventos": ['canal_eventos', 'canal_planejamento'],
+            "Canais Taxas": ['canal_relatorio_taxas', 'canal_pagamento_taxas', 'canal_info_taxas'],
+            "Cargos": ['cargo_membro', 'cargo_inadimplente', 'cargo_isento'],
+            "Permissões": ['perm_nivel_1', 'perm_nivel_2', 'perm_nivel_3', 'perm_nivel_4'],
+            "Economia": ['lastro_total_prata', 'taxa_conversao_prata'],
+            "Taxas Config": ['taxa_semanal_valor', 'taxa_dia_semana', 'taxa_dia_abertura', 'taxa_aceitar_moedas'],
+            "Mensagens Taxas": ['taxa_mensagem_inadimplente', 'taxa_mensagem_abertura', 'taxa_mensagem_reset'],
+            "IDs Msgs Relatório Taxas": ['taxa_msg_id_pendentes', 'taxa_msg_id_pagos', 'taxa_msg_id_isentos_novos', 'taxa_msg_id_isentos_cargo'],
+            "Renda Passiva": ['recompensa_voz', 'limite_voz', 'recompensa_chat', 'limite_chat', 'cooldown_chat', 'recompensa_reacao'],
+        }
+        # Adiciona chaves não categorizadas, se houver
+        known_keys = {k for cat_keys in categorias.values() for k in cat_keys}
+        other_keys = sorted([k for k in configs_dict if k not in known_keys])
+        if other_keys: categorias["Outras Configurações"] = other_keys
 
-    @commands.command(name="definir-recompensa-puxar")
-    @check_permission_level(4)
-    async def definir_recompensa_puxar(self, ctx, tier: str, valor: int):
-        tier_lower = tier.lower()
-        if tier_lower not in ['bronze', 'ouro']: return await ctx.send("❌ Tier inválido. Use `bronze` ou `ouro`.")
-        if valor < 0: return await ctx.send("❌ O valor da recompensa não pode ser negativo.")
-        await self.bot.db_manager.set_config_value(f"recompensa_puxar_{tier_lower}", str(valor))
-        await ctx.send(f"✅ Recompensa para puxadas **{tier.capitalize()}** definida para **{valor}** moedas.")
+        for nome_cat, chaves in categorias.items():
+            texto = ""
+            for chave in chaves: # Itera sobre as chaves na ordem definida
+                valor = configs_dict.get(chave, "*Não Definido*")
+                # Formatação (copiada da versão anterior, deve estar correta)
+                if valor != "*Não Definido*":
+                    try:
+                        if 'canal' in chave and valor.isdigit() and valor != '0':
+                             c = self.bot.get_channel(int(valor)) or await self.bot.fetch_channel(int(valor))
+                             valor = c.mention if c else f"⚠️ ID `{valor}` Inv/Acesso"
+                        elif 'cargo' in chave and valor.isdigit() and valor != '0':
+                             r = ctx.guild.get_role(int(valor))
+                             valor = r.mention if r else f"⚠️ ID `{valor}` Inválido"
+                        elif 'perm_nivel' in chave and valor:
+                             mencoes = []
+                             for rid_str in valor.split(','):
+                                 if rid_str.isdigit():
+                                     r = ctx.guild.get_role(int(rid_str))
+                                     mencoes.append(r.mention if r else f"⚠️ ID `{rid_str}`")
+                             valor = ", ".join(mencoes) if mencoes else "*Nenhum Cargo*"
+                        elif '_msg_id_' in chave and valor == '0':
+                            valor = "*Não criada*"
+                    except Exception as e: valor = f"⚠️ Erro ({valor}): {e}"
 
-    @commands.command(name="definir-limite-puxadas")
-    @check_permission_level(4)
-    async def definir_limite_puxadas(self, ctx, limite: int):
-        if limite < 0: return await ctx.send("❌ O limite não pode ser negativo.")
-        await self.bot.db_manager.set_config_value('limite_puxadas_diario', str(limite))
-        await ctx.send(f"✅ Limite diário de puxadas por membro definido para **{limite}**.")
+                texto += f"**{chave}:** {valor}\n"
+
+            # Adiciona o campo ao embed se houver conteúdo
+            if texto:
+                # Limita o valor do campo a 1024 caracteres
+                if len(texto) > 1024:
+                    texto = texto[:1020] + "\n..."
+                embed.add_field(name=f"--- {nome_cat} ---", value=texto, inline=False)
+
+        await ctx.send(embed=embed)
+
 
     @commands.command(name='auditar', hidden=True)
     @check_permission_level(4)
@@ -472,12 +491,8 @@ class Admin(commands.Cog):
         valor_bool = 'true' if estado.lower() == 'on' else 'false'
         try:
             await self.bot.db_manager.set_config_value('taxa_aceitar_moedas', valor_bool)
-            # --- DEBUGGING PRINT ---
-            print(f"[DEBUG][configtaxa moedas] Tentando definir taxa_aceitar_moedas para: '{valor_bool}'")
-            # --- FIM DEBUG ---
             await ctx.send(f"✅ Pagamento com moedas (`!pagar-taxa`) **{'ATIVADO' if valor_bool == 'true' else 'DESATIVADO'}**.")
         except Exception as e:
-            print(f"[DEBUG][configtaxa moedas] Erro ao definir config: {e}")
             await ctx.send(f"❌ Erro ao tentar definir a configuração: {e}")
     
     # ... (outros comandos admin inalterados) ...
