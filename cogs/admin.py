@@ -36,9 +36,8 @@ class Admin(commands.Cog):
                 'taxa_semanal_valor': '500', 'taxa_dia_semana': '6', 'taxa_dia_abertura': '5',
                 'cargo_membro': '0', 'cargo_inadimplente': '0', 'cargo_isento': '0',
                 'canal_relatorio_taxas': '0', 'canal_pagamento_taxas': '0', 'canal_info_taxas': '0',
-                'taxa_msg_id_pendentes': '0',
-                'taxa_msg_id_pagos': '0',
-                'taxa_msg_id_isentos': '0',
+                'taxa_msg_id_pendentes': '0', 'taxa_msg_id_pagos': '0', 'taxa_msg_id_isentos': '0',
+                'taxa_mensagem_inadimplente': 'Olá {member}! A taxa semanal de {tax_value} moedas não foi paga. O seu acesso foi temporariamente restringido. Use `!pagar-taxa` ou `!paguei-prata` para regularizar.', # <-- NOVA CONFIG
                 # ... (resto das configs existentes devem permanecer) ...
             }
             for chave, valor in default_configs.items():
@@ -50,7 +49,7 @@ class Admin(commands.Cog):
             # garante existência do tesouro na tabela banco
             await self.bot.db_manager.execute_query("INSERT INTO banco (user_id, saldo) VALUES ($1, 0) ON CONFLICT (user_id) DO NOTHING", self.ID_TESOURO_GUILDA)
 
-            print("Base de dados verificada (Estrutura de Taxas v2.4 com Relatório Multi-Mensagem).")
+            print("Base de dados verificada (Estrutura de Taxas v2.7 com Mensagem Inadimplente).")
         except Exception as e:
             print(f"❌ Ocorreu um erro ao inicializar a base de dados: {e}")
             raise e
@@ -429,6 +428,18 @@ class Admin(commands.Cog):
             synced = await self.bot.tree.sync()
             await ctx.send(f"✅ {len(synced)} comandos sincronizados.")
         except Exception as e: await ctx.send(f"❌ Falha na sincronização: {e}")
+
+    # --- NOVO COMANDO PARA DEFINIR MENSAGENS ---
+    @commands.group(name="definirmsg", invoke_without_command=True, hidden=True)
+    @check_permission_level(4)
+    async def definir_msg(self, ctx):
+        await ctx.send("Use `!definirmsg <tipo> <mensagem>`. Tipos disponíveis: `taxa_inadimplente`.")
+
+    @definir_msg.command(name="taxa_inadimplente")
+    async def definir_msg_taxa_inadimplente(self, ctx, *, mensagem: str):
+        """Define a mensagem a ser enviada por DM aos membros que ficam inadimplentes."""
+        await self.bot.db_manager.set_config_value("taxa_mensagem_inadimplente", mensagem)
+        await ctx.send(f"✅ Mensagem para inadimplentes definida!\n**Preview:**\n{mensagem.format(member=ctx.author.mention, tax_value=123)}")
 
 async def setup(bot):
     # Garante que o Admin cog é adicionado ao bot

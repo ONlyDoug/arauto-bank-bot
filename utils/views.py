@@ -96,7 +96,7 @@ class TaxaPrataView(discord.ui.View):
             return
         await interaction.response.defer()
         db_manager = self.bot.db_manager
-        
+
         try:
             submissao = await db_manager.execute_query(
                 "SELECT user_id FROM submissoes_taxa WHERE message_id = $1 AND status = 'pendente'",
@@ -111,16 +111,16 @@ class TaxaPrataView(discord.ui.View):
 
             user_id = submissao['user_id']
             membro = interaction.guild.get_member(user_id)
-            
+
             if novo_status == "aprovado" and membro:
                 taxas_cog = self.bot.get_cog('Taxas')
                 configs = await db_manager.get_all_configs(['cargo_membro', 'cargo_inadimplente'])
-                
+
                 await db_manager.execute_query(
                     "INSERT INTO taxas (user_id, status_ciclo) VALUES ($1, 'PAGO_ATRASADO') ON CONFLICT (user_id) DO UPDATE SET status_ciclo = 'PAGO_ATRASADO'",
                     user_id
                 )
-                
+
                 await taxas_cog.regularizar_membro(membro, configs)
 
             await db_manager.execute_query(
@@ -137,18 +137,18 @@ class TaxaPrataView(discord.ui.View):
                 embed.color = discord.Color.red()
                 embed.title = "❌ Pagamento de Taxa (Prata) RECUSADO"
                 embed.set_footer(text=f"Recusado por: {interaction.user.display_name}")
-            
+
             for item in self.children: item.disabled = True
             await interaction.message.edit(embed=embed, view=self)
 
             if membro:
                 try:
                     if novo_status == "aprovado":
-                        await membro.send("✅ O seu pagamento de taxa em prata foi **APROVADO**! O seu acesso foi restaurado.")
+                        await membro.send(f"🎉 Boas notícias, {membro.mention}! Seu comprovativo de pagamento da taxa em prata foi **APROVADO** pela staff. Seu acesso foi restaurado. Bom jogo!")
                     else:
-                        await membro.send("❌ O seu comprovativo de pagamento de taxa foi **RECUSADO**.")
+                        await membro.send(f"😕 Atenção, {membro.mention}. Seu comprovativo de pagamento da taxa em prata foi **RECUSADO** por `{interaction.user.name}`. Por favor, entre em contato com a staff para entender o motivo ou envie um novo comprovativo.")
                 except discord.Forbidden:
-                    print(f"Não foi possível enviar DM para {user_id}.")
+                    print(f"Não foi possível enviar DM para {user_id} (taxa prata).")
 
         except Exception as e:
             print(f"Erro ao processar aprovação de taxa prata: {e}")
