@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands
 from utils.permissions import check_permission_level
+from datetime import datetime, timezone
 
 class OrbeAprovacaoView(discord.ui.View):
     def __init__(self, bot: commands.Bot):
@@ -85,7 +86,6 @@ class OrbeAprovacaoView(discord.ui.View):
         await self.handle_interaction(interaction, "recusado")
 
 
-# --- ATUALIZAÇÃO CRÍTICA NA TaxaPrataView ---
 class TaxaPrataView(discord.ui.View):
     def __init__(self, bot: commands.Bot):
         super().__init__(timeout=None)
@@ -129,7 +129,8 @@ class TaxaPrataView(discord.ui.View):
                     user_id
                 )
                 # Restaura os cargos
-                await taxas_cog.regularizar_membro(membro, configs)
+                if taxas_cog:
+                    await taxas_cog.regularizar_membro(membro, configs)
 
             # Edita o embed de aprovação
             embed = interaction.message.embeds[0]
@@ -138,6 +139,17 @@ class TaxaPrataView(discord.ui.View):
             embed.set_footer(text=f"{novo_status.capitalize()} por: {interaction.user.display_name}")
             for item in self.children: item.disabled = True
             await interaction.edit_original_response(embed=embed, view=self)
+
+            # --- ENVIA FEEDBACK NO CANAL DE PAGAMENTO ---
+            canal_pagamento_id = int(await db_manager.get_config_value('canal_pagamento_taxas', '0') or 0)
+            if canal_pagamento_id and membro:
+                canal_pagamento = self.bot.get_channel(canal_pagamento_id)
+                if canal_pagamento:
+                    try:
+                        feedback_msg = f"✅ Pagamento em prata de {membro.mention} foi **APROVADO** por {interaction.user.mention}." if novo_status == "aprovado" else f"❌ Pagamento em prata de {membro.mention} foi **RECUSADO** por {interaction.user.mention}."
+                        await canal_pagamento.send(feedback_msg, delete_after=60)
+                    except Exception as feedback_e:
+                        print(f"Erro ao enviar feedback no canal de pagamento: {feedback_e}")
 
             # Envia DM
             if membro:

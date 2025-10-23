@@ -398,9 +398,13 @@ class Taxas(commands.Cog):
 
     @commands.command(name="paguei-prata")
     async def paguei_prata(self, ctx):
-        configs = await self.bot.db_manager.get_all_configs(['cargo_inadimplente', 'canal_pagamento_taxas'])
+        configs = await self.bot.db_manager.get_all_configs([
+            'cargo_inadimplente', 'canal_pagamento_taxas', 'canal_aprovacao'
+        ])
         canal_pagamento_id = int(configs.get('canal_pagamento_taxas', '0') or 0)
+        canal_aprovacao_id = int(configs.get('canal_aprovacao', '0') or 0)
 
+        # Verifica se está no canal de pagamento configurado
         if canal_pagamento_id and ctx.channel.id != canal_pagamento_id:
             try: await ctx.message.delete()
             except: pass
@@ -408,6 +412,7 @@ class Taxas(commands.Cog):
             mention = f" no canal {canal_pagamento.mention}" if canal_pagamento else ""
             return await ctx.send(f"❌ {ctx.author.mention}, este comando só pode ser usado{mention}.", delete_after=15)
 
+        # Verifica permissão do canal
         if not ctx.channel.permissions_for(ctx.author).send_messages:
             inadimplente_role_id = int(configs.get('cargo_inadimplente', '0') or 0)
             is_inadimplente = discord.utils.get(ctx.author.roles, id=inadimplente_role_id) if inadimplente_role_id else None
@@ -416,6 +421,7 @@ class Taxas(commands.Cog):
                 except: pass
                 return await ctx.send(f"⏳ {ctx.author.mention}, o canal está fechado para envio de comprovativos agora.", delete_after=20)
 
+        # Validação do anexo
         if not ctx.message.attachments:
             return await ctx.send(f"❌ {ctx.author.mention}, anexe o print do comprovativo na mesma mensagem do comando `!paguei-prata`.", delete_after=20)
 
@@ -424,27 +430,42 @@ class Taxas(commands.Cog):
         if not content_type or not content_type.startswith("image/"):
             return await ctx.send(f"❌ {ctx.author.mention}, o anexo deve ser uma imagem (print).", delete_after=20)
 
-        try:
-            submissao = await self.bot.db_manager.execute_query(
-                "INSERT INTO submissoes_taxa (user_id, message_id, status, anexo_url) VALUES ($1, $2, $3, $4) RETURNING id",
-                ctx.author.id, 0, 'pendente', attachment.url, fetch="one"
-            )
-            canal_aprovacao_id = int((await self.bot.db_manager.get_config_value('canal_pagamento_taxas', '0') or 0))
-            if canal_aprovacao_id:
-                canal_aprovacao = self.bot.get_channel(canal_aprovacao_id)
-                if canal_aprovacao:
-                    embed = discord.Embed(
-                        title="Submissão: Pagamento em Prata",
-                        description=f"Usuário: {ctx.author.mention}\nID: {ctx.author.id}",
-                        color=discord.Color.blurple(),
-                        timestamp=datetime.now(timezone.utc)
-                    )
-                    embed.set_image(url=attachment.url)
-                    msg = await canal_aprovacao.send(embed=embed, view=TaxaPrataView(self.bot))
-                    await self.bot.db_manager.execute_query("UPDATE submissoes_taxa SET message_id = $1 WHERE id = $2", msg.id, submissao['id'])
+        # Verifica se canal de aprovação está configurado e existe
+        if not canal_aprovacao_id:
+            return await ctx.send("⚠️ O canal de aprovações não foi configurado pela administração. Contacte a staff.", delete_after=30)
+        canal_aprovacao = self.bot.get_channel(canal_aprovacao_id)
+        if not canal_aprovacao:
+            return await ctx.send(f"⚠️ Erro: Canal de aprovações configurado (ID: {canal_aprovacao_id}) não encontrado.", delete_after=30)
 
-            await ctx.send(f"✅ {ctx.author.mention}, comprovativo enviado para análise da staff! Aguarde a aprovação para ter seu acesso restaurado.", delete_after=20)
-        except Exception:
+        # Prepara embed para o canal de aprovação
+        embed_aprovacao = discord.Embed(
+            title="🧾 Submissão: Pagamento em Prata",
+            description=f"**Membro:** {ctx.author.mention} (`{ctx.author.id}`)",
+            color=discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed_aprovacao.set_image(url=attachment.url)
+        embed_aprovacao.set_footer(text="Aguardando ação da Staff...")
+
+        try:
+            # Envia para o canal de aprovação com a View (botões)
+            msg_aprovacao = await canal_aprovacao.send(embed=embed_aprovacao, view=TaxaPrataView(self.bot))
+
+            # Regista a submissão associando o message_id correto
+            await self.bot.db_manager.execute_query(
+                "INSERT INTO submissoes_taxa (user_id, message_id, status, anexo_url) VALUES ($1, $2, $3, $4)",
+                ctx.author.id, msg_aprovacao.id, 'pendente', attachment.url
+            )
+
+            # Feedback ao utilizador no canal de pagamento
+            await ctx.send(f"✅ {ctx.author.mention}, comprovativo enviado para análise da staff em {canal_aprovacao.mention}! Aguarde a aprovação.", delete_after=60)
+            try: await ctx.message.add_reaction("👍")
+            except: pass
+
+        except discord.Forbidden:
+            await ctx.send(f"❌ Erro de permissão ao enviar para {canal_aprovacao.mention}. Verifique as permissões do bot.", delete_after=30)
+        except Exception as e:
+            print(f"Erro ao enviar submissão de prata: {e}")
             await ctx.send("❌ Falha ao enviar o comprovativo. Tente novamente ou contacte a staff.", delete_after=20)
 
     @commands.command(name="forcar-taxa", hidden=True)
