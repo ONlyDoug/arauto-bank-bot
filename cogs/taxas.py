@@ -5,6 +5,7 @@ from datetime import datetime, time, timedelta, timezone
 from collections import defaultdict
 import asyncio
 from utils.views import TaxaPrataView
+from zoneinfo import ZoneInfo  # <-- Importado ZoneInfo para GMT-3
 
 def format_list_for_embed(member_data, limit=40):
     if not member_data:
@@ -24,7 +25,7 @@ class Taxas(commands.Cog):
         self.ciclo_semanal_taxas.start()
         self.atualizar_relatorio_automatico.start()
         self.gerenciar_canal_e_anuncios_taxas.start()
-        print("Módulo de Taxas v3.2 (Final Completo - Limpo) pronto.")
+        print("Módulo de Taxas v3.2 (Final - Horário GMT-3) pronto.")
 
     def cog_unload(self):
         self.ciclo_semanal_taxas.cancel()
@@ -180,7 +181,7 @@ class Taxas(commands.Cog):
     async def before_relatorio(self):
         await self.bot.wait_until_ready()
 
-    @tasks.loop(time=time(hour=0, minute=1, tzinfo=datetime.now().astimezone().tzinfo))
+    @tasks.loop(time=time(hour=0, minute=0, tzinfo=ZoneInfo("America/Sao_Paulo")))  # 00:00 GMT-3 (São_Paulo)
     async def gerenciar_canal_e_anuncios_taxas(self):
         try:
             configs = await self.bot.db_manager.get_all_configs([
@@ -202,7 +203,8 @@ class Taxas(commands.Cog):
             if not cargo:
                 return
 
-            hoje = datetime.now().weekday()
+            # Usa fuso GMT-3 para determinar o dia (America/Sao_Paulo)
+            hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).weekday()
             perms = canal.overwrites_for(cargo)
 
             if hoje == dia_abertura:
@@ -215,19 +217,22 @@ class Taxas(commands.Cog):
                             await canal.send(msg_abertura)
                         except Exception as e:
                             print(f"Erro ao enviar mensagem de abertura: {e}")
+                    print(f"Canal {canal.name} ABERTO para taxa (GMT-3).")
             elif hoje == dia_fechamento:
                 if perms.send_messages is not False:
                     perms.send_messages = False
                     await canal.set_permissions(cargo, overwrite=perms, reason="Fechamento janela taxa")
+                    print(f"Canal {canal.name} FECHADO para taxa (GMT-3).")
                     try:
                         await canal.purge(limit=200, check=lambda msg: not msg.pinned)
                         await self._enviar_instrucoes_pagamento(canal)
+                        print(f"Canal {canal.name} limpo e instruções atualizadas.")
                     except discord.Forbidden:
                         print(f"Sem permissão para limpar {canal.name}.")
                     except Exception as e:
                         print(f"Erro ao limpar/instruir {canal.name}: {e}")
         except Exception as e:
-            print(f"Erro na tarefa gerenciar_canal_e_anuncios_taxas: {e}")
+            print(f"Erro task gerenciar_canal_e_anuncios_taxas: {e}")
 
     @gerenciar_canal_e_anuncios_taxas.before_loop
     async def before_gerenciar_canal(self):
@@ -235,9 +240,11 @@ class Taxas(commands.Cog):
 
     @tasks.loop(time=time(hour=12, minute=0, tzinfo=datetime.now().astimezone().tzinfo))
     async def ciclo_semanal_taxas(self):
-        dia_reset = int(await self.bot.db_manager.get_config_value('taxa_dia_semana', '6') or 6)
-        if datetime.now().weekday() == dia_reset:
-            await self.executar_ciclo_de_taxas(resetar_ciclo=True)
+         dia_reset = int(await self.bot.db_manager.get_config_value('taxa_dia_semana', '6') or 6)
+         # Usar fuso horário local do servidor para esta comparação
+         if datetime.now().astimezone().weekday() == dia_reset:
+             print(f"[{datetime.now()}] Iniciando ciclo semanal COMPLETO de taxas...")
+             await self.executar_ciclo_de_taxas(resetar_ciclo=True)
 
     async def executar_ciclo_de_taxas(self, ctx=None, resetar_ciclo: bool = False):
         guild = ctx.guild if ctx else (self.bot.guilds[0] if self.bot.guilds else None)
