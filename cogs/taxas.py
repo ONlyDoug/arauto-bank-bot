@@ -697,6 +697,36 @@ class Taxas(commands.Cog):
         except Exception as e:
             await ctx.send(f"❌ Erro ao limpar canal: {e}")
 
+    # --- COMANDOS DE CONFIGURAÇÃO DE TAXAS RESTAURADOS ---
+    @commands.command(name="definir-taxa", hidden=True)
+    @check_permission_level(4)
+    async def definir_taxa(self, ctx, valor: int):
+        """Define o valor da taxa semanal em moedas."""
+        if valor < 0:
+            return await ctx.send("❌ O valor da taxa não pode ser negativo.")
+        await self.bot.db_manager.set_config_value('taxa_semanal_valor', str(valor))
+        await ctx.send(f"✅ Valor da taxa semanal definido para **{valor}** moedas.")
+
+    @commands.command(name="definir-taxa-dia", hidden=True)
+    @check_permission_level(4)
+    async def definir_taxa_dia(self, ctx, dia_da_semana: int):
+        """Define o dia da semana para o reset das taxas (0=Segunda, 6=Domingo)."""
+        if not 0 <= dia_da_semana <= 6:
+            return await ctx.send("❌ Dia inválido (0=Segunda, 6=Domingo).")
+        dias = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+        await self.bot.db_manager.set_config_value('taxa_dia_semana', str(dia_da_semana))
+        await ctx.send(f"✅ O ciclo de reset das taxas foi agendado para **{dias[dia_da_semana]}**.")
+
+    @commands.command(name="definir-taxa-dia-abertura", hidden=True)
+    @check_permission_level(4)
+    async def definir_taxa_dia_abertura(self, ctx, dia_da_semana: int):
+        """Define o dia da semana para abrir a janela de pagamento (0=Segunda, 6=Domingo)."""
+        if not 0 <= dia_da_semana <= 6:
+            return await ctx.send("❌ Dia inválido (0=Segunda, 6=Domingo).")
+        dias = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"]
+        await self.bot.db_manager.set_config_value('taxa_dia_abertura', str(dia_da_semana))
+        await ctx.send(f"✅ Janela de pagamento de taxas abrirá toda **{dias[dia_da_semana]}**.")
+
 async def setup(bot): await bot.add_cog(Taxas(bot))
 
 
