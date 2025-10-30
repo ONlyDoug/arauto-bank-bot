@@ -5,7 +5,7 @@ from datetime import datetime, time, timedelta, timezone
 from collections import defaultdict
 import asyncio
 from utils.views import TaxaPrataView
-from zoneinfo import ZoneInfo # Importa ZoneInfo
+from zoneinfo import ZoneInfo # Garante que a importação está presente
 
 # Função auxiliar
 def format_list_for_embed(member_data, limit=40):
@@ -23,7 +23,7 @@ class Taxas(commands.Cog):
         self.ciclo_semanal_taxas.start()
         self.atualizar_relatorio_automatico.start()
         self.gerenciar_canal_e_anuncios_taxas.start()
-        print("Módulo de Taxas v3.2 (Final Completo) pronto.")
+        print("Módulo de Taxas v3.3 (Verificação Prioritária) pronto.")
 
     def cog_unload(self):
         self.ciclo_semanal_taxas.cancel()
@@ -250,41 +250,47 @@ class Taxas(commands.Cog):
             except Exception as e: print(f"Erro ao enviar log: {e}")
         print(f"Ciclo taxas: {len(inadimplentes)} inad., {len(novos_isentos)} isen. novos, {len(isentos_cargo)} isen. cargo." + (f" {len(resetados_db)} resetados." if resetar_ciclo else ""))
 
-    # --- Comandos do Utilizador ---
+    # --- Comandos do Utilizador (LÓGICA ATUALIZADA) ---
     @commands.command(name="pagar-taxa")
     async def pagar_taxa(self, ctx):
+        # Apaga o comando do utilizador imediatamente para manter o canal limpo
+        try: await ctx.message.delete()
+        except: pass
+
         configs = await self.bot.db_manager.get_all_configs([
              'taxa_semanal_valor', 'taxa_aceitar_moedas', 'cargo_inadimplente', 'canal_pagamento_taxas'
         ])
-        
-        if str(configs.get('taxa_aceitar_moedas', 'true')).lower() == 'false':
-             try: await ctx.message.delete()
-             except: pass
-             return await ctx.send(f"⚠️ {ctx.author.mention}, o pagamento de taxas com moedas está temporariamente desativado.", delete_after=20)
 
+        # --- 1. VERIFICAÇÃO DE CANAL ---
         canal_pagamento_id = int(configs.get('canal_pagamento_taxas', '0') or 0)
         if canal_pagamento_id and ctx.channel.id != canal_pagamento_id:
-             try: await ctx.message.delete()
-             except: pass
              canal_p = self.bot.get_channel(canal_pagamento_id); mention = f" em {canal_p.mention}" if canal_p else ""
              return await ctx.send(f"❌ {ctx.author.mention}, use este comando{mention}.", delete_after=15)
 
+        # --- 2. VERIFICAÇÃO DE STATUS DE PAGAMENTO (PRIORITÁRIA) ---
+        status_db = await self.bot.db_manager.execute_query("SELECT status_ciclo FROM taxas WHERE user_id = $1", ctx.author.id, fetch="one")
+        status_atual = status_db['status_ciclo'] if status_db else 'PENDENTE'
+        if status_atual.startswith('PAGO'):
+            return await ctx.send(f"✅ {ctx.author.mention}, você já pagou a taxa para este ciclo. Não precisa de pagar novamente.", delete_after=20)
+
+        # --- 3. VERIFICAÇÃO DE TOGGLE (MOEDAS) ---
+        if str(configs.get('taxa_aceitar_moedas', 'true')).lower() == 'false':
+             return await ctx.send(f"⚠️ {ctx.author.mention}, o pagamento de taxas com moedas está temporariamente desativado.", delete_after=20)
+
+        # --- 4. VERIFICAÇÃO DE CANAL FECHADO/JANELA ---
         if not ctx.channel.permissions_for(ctx.author).send_messages:
             inadimplente_role = ctx.guild.get_role(int(configs.get('cargo_inadimplente', '0') or 0))
             if not (inadimplente_role and inadimplente_role in ctx.author.roles):
-                 try: await ctx.message.delete()
-                 except: pass
                  return await ctx.send(f"⏳ {ctx.author.mention}, o canal de pagamento está fechado para pagamentos antecipados agora.", delete_after=20)
 
+        # --- 5. LÓGICA DE PAGAMENTO ---
         try:
             valor_taxa = int(configs.get('taxa_semanal_valor', 0) or 0)
-            if valor_taxa == 0: return await ctx.send("ℹ️ Sistema de taxas desativado.")
-            status_db = await self.bot.db_manager.execute_query("SELECT status_ciclo FROM taxas WHERE user_id = $1", ctx.author.id, fetch="one")
-            status_atual = status_db['status_ciclo'] if status_db else 'PENDENTE'
-            if status_atual.startswith('PAGO'): return await ctx.send(f"✅ {ctx.author.mention}, você já pagou a taxa para este ciclo.", delete_after=20)
+            if valor_taxa == 0: return await ctx.send("ℹ️ Sistema de taxas desativado.", delete_after=20)
 
             economia = self.bot.get_cog('Economia'); saldo_atual = await economia.get_saldo(ctx.author.id)
-            if saldo_atual < valor_taxa: return await ctx.send(f"❌ {ctx.author.mention}, saldo insuficiente! Precisa de **{valor_taxa}** 🪙, possui **{saldo_atual}** 🪙.")
+            if saldo_atual < valor_taxa:
+                return await ctx.send(f"❌ {ctx.author.mention}, saldo insuficiente! Precisa de **{valor_taxa}** 🪙, possui **{saldo_atual}** 🪙.", delete_after=20)
 
             status_pagamento = 'PAGO_ANTECIPADO' if ctx.channel.permissions_for(ctx.author).send_messages else 'PAGO_ATRASADO'
             await economia.levantar(ctx.author.id, valor_taxa, f"Pagamento de taxa semanal ({status_pagamento})")
@@ -293,28 +299,37 @@ class Taxas(commands.Cog):
             msg_sucesso = f"✅ Pagamento de **{valor_taxa}** 🪙 recebido, {ctx.author.mention}! Status: **{status_pagamento}**."
             if discord.utils.get(ctx.author.roles, id=int(configs.get('cargo_inadimplente', '0') or 0)):
                 await self.regularizar_membro(ctx.author, configs); msg_sucesso += " Acesso restaurado!"
-            await ctx.send(msg_sucesso)
-        except Exception as e: await ctx.send(f"⚠️ Erro no pagamento: {e}")
+            await ctx.send(msg_sucesso, delete_after=30) # Mensagem de sucesso também é temporária
+        except Exception as e: await ctx.send(f"⚠️ Erro no pagamento: {e}", delete_after=20)
 
     @commands.command(name="paguei-prata")
     async def paguei_prata(self, ctx):
+        # Apaga o comando do utilizador imediatamente
+        try: await ctx.message.delete()
+        except: pass
+        
         configs = await self.bot.db_manager.get_all_configs(['cargo_inadimplente', 'canal_pagamento_taxas', 'canal_aprovacao'])
         canal_pagamento_id = int(configs.get('canal_pagamento_taxas', '0') or 0)
         canal_aprovacao_id = int(configs.get('canal_aprovacao', '0') or 0)
 
+        # --- 1. VERIFICAÇÃO DE CANAL ---
         if canal_pagamento_id and ctx.channel.id != canal_pagamento_id:
-             try: await ctx.message.delete()
-             except: pass
              canal_p = self.bot.get_channel(canal_pagamento_id); mention = f" em {canal_p.mention}" if canal_p else ""
              return await ctx.send(f"❌ {ctx.author.mention}, use este comando{mention}.", delete_after=15)
 
+        # --- 2. VERIFICAÇÃO DE STATUS DE PAGAMENTO (PRIORITÁRIA) ---
+        status_db = await self.bot.db_manager.execute_query("SELECT status_ciclo FROM taxas WHERE user_id = $1", ctx.author.id, fetch="one")
+        status_atual = status_db['status_ciclo'] if status_db else 'PENDENTE'
+        if status_atual.startswith('PAGO'):
+            return await ctx.send(f"✅ {ctx.author.mention}, você já pagou a taxa para este ciclo.", delete_after=20)
+
+        # --- 3. VERIFICAÇÃO DE CANAL FECHADO/JANELA ---
         if not ctx.channel.permissions_for(ctx.author).send_messages:
             inadimplente_role = ctx.guild.get_role(int(configs.get('cargo_inadimplente', '0') or 0))
             if not (inadimplente_role and inadimplente_role in ctx.author.roles):
-                 try: await ctx.message.delete()
-                 except: pass
                  return await ctx.send(f"⏳ {ctx.author.mention}, o canal está fechado para envio de comprovativos agora.", delete_after=20)
 
+        # --- 4. LÓGICA DE SUBMISSÃO ---
         if not ctx.message.attachments or not ctx.message.attachments[0].content_type.startswith('image/'):
             return await ctx.send(f"❌ {ctx.author.mention}, anexe o print na **mesma mensagem**.", delete_after=20)
         
@@ -333,8 +348,7 @@ class Taxas(commands.Cog):
                 ctx.author.id, msg_aprovacao.id, 'pendente', attachment.url
             )
             await ctx.send(f"✅ {ctx.author.mention}, comprovativo enviado para análise! Aguarde a aprovação.", delete_after=60)
-            try: await ctx.message.add_reaction("👍")
-            except: pass
+            # Não reagimos mais à mensagem, pois ela será apagada.
         except Exception as e:
             print(f"Erro ao enviar submissão de prata: {e}")
             await ctx.send("❌ Falha ao enviar o comprovativo. Tente novamente ou contacte a staff.", delete_after=20)
@@ -343,14 +357,20 @@ class Taxas(commands.Cog):
     @commands.command(name="ajudataxa")
     async def ajuda_taxa(self, ctx):
         canal_pagamento_id = int(await self.bot.db_manager.get_config_value('canal_pagamento_taxas', '0') or 0)
+        
+        # Só funciona no canal de pagamento
         if not canal_pagamento_id or ctx.channel.id != canal_pagamento_id:
             try: await ctx.message.delete()
             except: pass
             return
-        try: await ctx.message.delete()
+
+        try:
+            await ctx.message.delete() # Deleta o comando !ajudataxa
         except: pass
+        
+        # Envia uma versão temporária das instruções (sem fixar)
         embed_instrucoes = await self._construir_embed_instrucoes()
-        await ctx.send(embed=embed_instrucoes, delete_after=60)
+        await ctx.send(embed=embed_instrucoes, delete_after=120) # Aumentado para 2 minutos
 
     # --- Comandos de Administração ---
     @commands.command(name="forcar-taxa", hidden=True)
