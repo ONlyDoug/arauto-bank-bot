@@ -5,9 +5,9 @@ from datetime import datetime, time, timedelta, timezone
 from collections import defaultdict
 import asyncio
 from utils.views import TaxaPrataView
-from zoneinfo import ZoneInfo # Garante que a importação está presente
+from zoneinfo import ZoneInfo
 
-# Função auxiliar
+# Função format_list_for_embed (inalterada)
 def format_list_for_embed(member_data, limit=40):
     if not member_data: return "Nenhum membro nesta categoria."
     display_data = member_data[:limit]
@@ -23,14 +23,14 @@ class Taxas(commands.Cog):
         self.ciclo_semanal_taxas.start()
         self.atualizar_relatorio_automatico.start()
         self.gerenciar_canal_e_anuncios_taxas.start()
-        print("Módulo de Taxas v3.3 (Verificação Prioritária) pronto.")
+        print("Módulo de Taxas v3.3 (UX Melhorada) pronto.")
 
     def cog_unload(self):
         self.ciclo_semanal_taxas.cancel()
         self.atualizar_relatorio_automatico.cancel()
         self.gerenciar_canal_e_anuncios_taxas.cancel()
 
-    # --- Listener e Regularizar ---
+    # --- Listener on_member_update (inalterado) ---
     @commands.Cog.listener()
     async def on_member_update(self, before, after):
         try:
@@ -47,6 +47,7 @@ class Taxas(commands.Cog):
                 print(f"Novo membro {after.name} registado para isenção de taxa.")
         except Exception as e: print(f"Erro no listener on_member_update: {e}")
 
+    # --- Regularizar Membro (inalterado) ---
     async def regularizar_membro(self, membro: discord.Member, configs: dict):
         try:
             cargo_inadimplente = membro.guild.get_role(int(configs.get('cargo_inadimplente', '0') or 0))
@@ -61,7 +62,7 @@ class Taxas(commands.Cog):
             if to_remove: await membro.remove_roles(*to_remove, reason="Taxa regularizada")
         except Exception as e: print(f"Erro ao regularizar {membro.name}: {e}")
 
-    # --- Tarefas em Segundo Plano ---
+    # --- Tarefas em Segundo Plano (_update_report_message, atualizar_relatorio_automatico, gerenciar_canal_e_anuncios_taxas, ciclo_semanal_taxas inalteradas) ---
     async def _update_report_message(self, canal: discord.TextChannel, config_key: str, embed: discord.Embed):
         try:
             msg_id = int(await self.bot.db_manager.get_config_value(config_key, '0') or 0)
@@ -372,7 +373,7 @@ class Taxas(commands.Cog):
         embed_instrucoes = await self._construir_embed_instrucoes()
         await ctx.send(embed=embed_instrucoes, delete_after=120) # Aumentado para 2 minutos
 
-    # --- Comandos de Administração ---
+    # --- Comandos de Administração (inalterados) ---
     @commands.command(name="forcar-taxa", hidden=True)
     @check_permission_level(4)
     async def forcar_taxa(self, ctx):
@@ -414,7 +415,9 @@ class Taxas(commands.Cog):
 
     @commands.group(name="taxamanual", invoke_without_command=True, hidden=True)
     @check_permission_level(3)
-    async def taxa_manual(self, ctx): await ctx.send("Use `!taxamanual <status> <@membro>`. Status: `pago`, `isento`, `removerpago`, `removerisento`.")
+    async def taxa_manual(self, ctx):
+         await ctx.send("Use `!taxamanual <status> <@membro>`. Status: `pago`, `isento`, `removerpago`, `removerisento`.")
+
     async def _log_manual_action(self, ctx, membro, acao):
         if canal_log := self.bot.get_channel(int(await self.bot.db_manager.get_config_value('canal_log_taxas', '0') or 0)):
             await canal_log.send(f"ℹ️ **Ação Manual:** {ctx.author.mention} definiu o status de {membro.mention} como **{acao}**.")
